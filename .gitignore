@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+restored_audio/
+restored_audio/*
+temp_repo_debug/
+temp_repo_debug/*
+.env
+inputs/
+outputs/
+training_data/
+training_output/

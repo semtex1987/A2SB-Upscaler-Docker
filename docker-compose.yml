@@ -1,0 +1,26 @@
+services:
+  upsampler:
+    build: .
+    image: semtex87/a2sb-upscaler
+    container_name: nvidia_upsample
+    
+    ports:
+      - "7860:7860"
+    
+    volumes:
+      - ./restored_audio:/app/outputs
+      - ./training_output/checkpoints:/app/ckpts/finetuned:ro
+    
+    environment:
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+    
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+
+    stdin_open: true
+    tty: true

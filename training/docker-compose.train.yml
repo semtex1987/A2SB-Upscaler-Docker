@@ -1,0 +1,18 @@
+services:
+  trainer:
+    build:
+      context: ..
+      dockerfile: training/Dockerfile.train
+    image: a2sb-trainer
+    volumes:
+      - ../training_data:/data/training_data
+      - ../training_output:/data/training_output
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    stdin_open: true
+    tty: true

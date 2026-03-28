@@ -1,0 +1,56 @@
+# Training container for A2SB fine-tuning (no Gradio).
+# Same base and clone as inference; adds training script and configs.
+FROM pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    wget \
+    ffmpeg \
+    libsndfile1 \
+    vim \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY nvidia-a2sb-original-repo/ /app/
+
+RUN pip install --no-cache-dir \
+    moviepy==1.0.3 \
+    "jsonargparse[signatures]>=4.27.7" \
+    scikit-image \
+    torchlibrosa \
+    pyyaml \
+    numpy \
+    scipy \
+    matplotlib \
+    librosa \
+    soundfile \
+    torchaudio \
+    einops \
+    pytorch_lightning \
+    lightning \
+    rotary_embedding_torch \
+    tqdm
+
+RUN pip install --no-cache-dir --no-deps ssr_eval
+
+RUN mkdir -p ckpts
+
+RUN wget -O ckpts/A2SB_twosplit_0.5_1.0_release.ckpt https://huggingface.co/nvidia/audio_to_audio_schrodinger_bridge/resolve/main/ckpt/A2SB_twosplit_0.5_1.0_release.ckpt
+RUN wget -O ckpts/A2SB_onesplit_0.0_1.0_release.ckpt https://huggingface.co/nvidia/audio_to_audio_schrodinger_bridge/resolve/main/ckpt/A2SB_onesplit_0.0_1.0_release.ckpt
+RUN wget -O ckpts/A2SB_twosplit_0.0_0.5_release.ckpt https://huggingface.co/nvidia/audio_to_audio_schrodinger_bridge/resolve/main/ckpt/A2SB_twosplit_0.0_0.5_release.ckpt
+
+ENV CUDA_VISIBLE_DEVICES=0 \
+    MKL_THREADING_LAYER=GNU \
+    PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,max_split_size_mb:512"
+
+RUN mkdir -p /app/training/configs /data/training_data /data/training_output /debug
+
+COPY training/finetune.py /app/training/finetune.py
+COPY training/configs/ /app/training/configs/
+
+WORKDIR /app
+
+# Default: start a shell. Override with e.g. python /app/training/finetune.py --steps 5000
+CMD ["/bin/bash"]
