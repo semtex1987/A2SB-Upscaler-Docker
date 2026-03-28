@@ -102,6 +102,8 @@ For more options (e.g. `--splits`, `--batch-size`, `--learning-rate`) and a shor
 
 ## RunPod and other cloud GPU pods
 
+Pre-configured template https://console.runpod.io/deploy?template=rtpczbd3cl&ref=685x2sbd
+
 When you run this app on RunPod (or similar), use the image **as built from this repo** and configure the Pod so the app can write outputs and the inference subprocess can run.
 
 ### Use this repo’s image and entrypoint
