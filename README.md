@@ -21,7 +21,7 @@ This repository provides a Dockerized interface for [NVIDIA's Audio-to-Audio Sch
 
 1. **Clone the repository**:
    ```bash
-   git clone (https://github.com/semtex1987/A2SB-Upscaler-Docker)
+   git clone https://github.com/semtex1987/A2SB-Upscaler-Docker
    cd A2SB-Upscaler
    ```
 
