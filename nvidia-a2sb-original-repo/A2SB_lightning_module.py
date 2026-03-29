@@ -117,7 +117,7 @@ class TimePartitionedPretrainedSTFTBridgeModel(LightningModule):
 
         x_t = x_1.clone()
         pred_x0 = None
-        all_pred_x0s = []
+        all_pred_x0s = [None] * n_steps
 
         for t_idx in tqdm(range(n_steps)):
             # print(t_idx)
@@ -133,7 +133,7 @@ class TimePartitionedPretrainedSTFTBridgeModel(LightningModule):
             if mask is not None and mask_pred_x0:
                 pred_x0 = pred_x0 * mask + (1-mask) * x_1
 
-            all_pred_x0s.append(pred_x0.cpu())
+            all_pred_x0s[t_idx] = pred_x0.cpu()
             x_t_prev = self.ddpm.p_posterior(t_prev, t, x_t, pred_x0, ot_ode=self.use_ot_ode)
             x_t = x_t_prev
             if mask is not None:
@@ -246,7 +246,7 @@ class STFTBridgeModel(LightningModule):
 
         x_t = x_1.clone()
         pred_x0 = None
-        all_pred_x0s = []
+        all_pred_x0s = [None] * n_steps
 
         for t_idx in range(n_steps):
 
@@ -258,7 +258,7 @@ class STFTBridgeModel(LightningModule):
             if mask is not None and mask_pred_x0:
                 pred_x0 = pred_x0 * mask + (1-mask) * x_1
 
-            all_pred_x0s.append(pred_x0.cpu())
+            all_pred_x0s[t_idx] = pred_x0.cpu()
             x_t_prev = self.ddpm.p_posterior(t_prev, t, x_t, pred_x0, ot_ode=self.use_ot_ode)
 
             x_t = x_t_prev
@@ -282,7 +282,7 @@ class STFTBridgeModel(LightningModule):
 
         x_t = x_1.clone()
         pred_x0 = None
-        all_pred_x0s = []
+        all_pred_x0s = [None] * n_steps
 
         for t_idx in range(n_steps):
 
@@ -312,7 +312,7 @@ class STFTBridgeModel(LightningModule):
                 
                 x_t = (1. - mask) * xt_true + mask * x_t
 
-            all_pred_x0s.append(pred_x0.cpu())
+            all_pred_x0s[t_idx] = pred_x0.cpu()
         return all_pred_x0s
 
     def ddpm_sample_i2sb_change_order(self, x_1, t_steps=None, mask=None):
@@ -320,7 +320,7 @@ class STFTBridgeModel(LightningModule):
 
         x_t = x_1.clone()
         pred_x0 = None
-        all_pred_x0s = []
+        all_pred_x0s = [None] * n_steps
 
         for t_idx in range(n_steps):
 
@@ -348,7 +348,7 @@ class STFTBridgeModel(LightningModule):
 
                 pred_x0 = pred_x0 * mask + (1-mask) * xt_true
 
-            all_pred_x0s.append(pred_x0.cpu())
+            all_pred_x0s[t_idx] = pred_x0.cpu()
             x_t_prev = self.ddpm.p_posterior(t_prev, t, x_t, pred_x0, ot_ode=self.use_ot_ode)
 
             x_t = x_t_prev
