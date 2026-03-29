@@ -101,13 +101,8 @@ class TimePartitionedPretrainedSTFTBridgeModel(LightningModule):
         # TODO move this outside of lightningmodule
         spec_out: B x C x H x W model outputs to be mapped back to waveform
         """
-        all_wav_samples = [] # assume transforms don't support batch dimension for now
-        num_samples = spec_out.shape[0]
-
-        for b in range(num_samples):
-            all_wav_samples.append(apply_audio_transforms(spec_out[b], self.inv_transforms)[0])
-
-        return all_wav_samples
+        # assume transforms don't support batch dimension for now
+        return [apply_audio_transforms(spec_out[b], self.inv_transforms)[0] for b in range(spec_out.shape[0])]
 
     @torch.no_grad()
     def ddpm_sample(self, x_1, t_steps=None, mask=None, mask_pred_x0=True,
@@ -370,13 +365,8 @@ class STFTBridgeModel(LightningModule):
         # TODO move this outside of lightningmodule
         spec_out: B x C x H x W model outputs to be mapped back to waveform
         """
-        all_wav_samples = [] # assume transforms don't support batch dimension for now
-        num_samples = spec_out.shape[0]
-
-        for b in range(num_samples):
-            all_wav_samples.append(apply_audio_transforms(spec_out[b], self.inv_transforms)[0])
-
-        return all_wav_samples
+        # assume transforms don't support batch dimension for now
+        return [apply_audio_transforms(spec_out[b], self.inv_transforms)[0] for b in range(spec_out.shape[0])]
     
     def sample_t_bounded(self, n_samples):
         t_range = self.train_t_max - self.train_t_min
