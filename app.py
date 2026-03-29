@@ -2,6 +2,7 @@ import gradio as gr
 import subprocess
 import os
 import tempfile
+import glob
 import numpy as np
 import matplotlib
 # Use 'Agg' backend to prevent errors in Docker (no display)
@@ -25,6 +26,22 @@ def _ensure_runtime_dir(preferred_path, fallback_name):
 
 INPUT_DIR = _ensure_runtime_dir(os.environ.get("A2SB_INPUT_DIR", "/app/inputs"), "a2sb-inputs")
 OUTPUT_DIR = _ensure_runtime_dir(os.environ.get("A2SB_OUTPUT_DIR", "/app/outputs"), "a2sb-outputs")
+
+
+def _read_int_env(name, default):
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+UI_BATCH_MIN = 1
+UI_BATCH_MAX = max(UI_BATCH_MIN, _read_int_env("A2SB_UI_BATCH_MAX", 64))
+UI_BATCH_DEFAULT = _read_int_env("A2SB_DEFAULT_BATCH_SIZE", 16)
+UI_BATCH_DEFAULT = min(max(UI_BATCH_DEFAULT, UI_BATCH_MIN), UI_BATCH_MAX)
 
 # --- Signal Processing Functions ---
 
@@ -128,7 +145,11 @@ def run_a2sb_inference(input_path, output_path, steps, cutoff_hz, batch_size):
     env = os.environ.copy()
     env["PYTHONPATH"] = "/app"
 
-    print(f"[A2SB] command: {' '.join(command)}")
+    print(
+        f"[A2SB] command: {' '.join(command)} "
+        f"(steps={int(steps)}, cutoff_hz={int(cutoff_hz)}, batch_size={int(batch_size)})",
+        flush=True,
+    )
     result = subprocess.run(
         command,
         check=True,
@@ -217,6 +238,55 @@ def normalize_input_files(input_files):
     return list(input_files)
 
 
+def normalize_staged_paths(staged_paths_text):
+    if not staged_paths_text:
+        return []
+
+    files = []
+    lines = [line.strip() for line in staged_paths_text.splitlines() if line.strip()]
+    for line in lines:
+        matches = sorted(glob.glob(line))
+        if matches:
+            files.extend(path for path in matches if os.path.isfile(path))
+        elif os.path.isfile(line):
+            files.append(line)
+
+    # De-duplicate while preserving order.
+    deduped = []
+    seen = set()
+    for path in files:
+        if path in seen:
+            continue
+        seen.add(path)
+        deduped.append(path)
+    return deduped
+
+
+def merge_input_sources(uploaded_files, staged_paths_text):
+    merged = []
+    seen = set()
+    for path in normalize_input_files(uploaded_files) + normalize_staged_paths(staged_paths_text):
+        if path in seen:
+            continue
+        seen.add(path)
+        merged.append(path)
+    return merged
+
+
+def list_staged_files(staged_paths_text):
+    if not staged_paths_text or not staged_paths_text.strip():
+        return "No staged path pattern provided yet."
+
+    files = normalize_staged_paths(staged_paths_text)
+    if not files:
+        return "No staged files matched the provided path(s)."
+
+    lines = [f"Matched {len(files)} staged file(s):"]
+    for path in files:
+        lines.append(f"- `{path}`")
+    return "\n".join(lines)
+
+
 def restore_one_audio(input_file, steps, cutoff_hz, batch_size, progress, file_index, total_files):
     try:
         audio = AudioSegment.from_file(input_file)
@@ -300,7 +370,9 @@ def restore_one_audio(input_file, steps, cutoff_hz, batch_size, progress, file_i
 def restore_audio(input_files, steps, cutoff_choice, batch_size, progress=gr.Progress()):
     files = normalize_input_files(input_files)
     if not files:
-        return None, None
+        raise gr.Error(
+            "No input files found. Upload file(s), or use staged paths like /app/inputs/*.wav."
+        )
 
     cutoff_hz = int(cutoff_choice.lower().replace("khz", "")) * 1000
     restored_outputs = []
@@ -358,9 +430,19 @@ def select_preview(selection, restored_outputs, plot_outputs):
     return restored_outputs[selected_index], plot_outputs[selected_index]
 
 
-def process_batch(input_files, steps, cutoff_choice, batch_size, progress=gr.Progress()):
+def process_batch(input_files, staged_paths, steps, cutoff_choice, batch_size, progress=gr.Progress()):
+    files = merge_input_sources(input_files, staged_paths)
+    if not files:
+        raise gr.Error(
+            "No input files found. Upload file(s), or use staged paths like /app/inputs/*.wav."
+        )
+    print(
+        f"[A2SB] batch_start files={len(files)} steps={int(steps)} cutoff={cutoff_choice} "
+        f"batch_size={int(batch_size)}",
+        flush=True,
+    )
     restored_outputs, plot_outputs = restore_audio(
-        input_files,
+        files,
         steps,
         cutoff_choice,
         batch_size,
@@ -386,11 +468,17 @@ def process_batch(input_files, steps, cutoff_choice, batch_size, progress=gr.Pro
 
 if __name__ == "__main__":
     custom_css = "body { background-color: #121212; color: white; }"
-    with gr.Blocks(theme=gr.themes.Default(), css=custom_css) as demo:
+    with gr.Blocks() as demo:
         gr.Markdown("# NVIDIA A2SB Stereo Restorer")
         gr.Markdown(
             "Upload one or many audio files to restore them sequentially. "
-            "Lower batch size reduces VRAM usage at the cost of longer inference time."
+            "Lower batch size reduces VRAM usage at the cost of longer inference time. "
+            "For H100/H200, 16-32 is a good starting range. For bandwidth extension, "
+            "50-100 steps is usually the practical range."
+        )
+        gr.Markdown(
+            "Optional: stage files directly on the pod (for example with runpodctl) and "
+            "enter paths like /app/inputs/*.wav below to bypass browser upload."
         )
 
         restored_state = gr.State([])
@@ -404,13 +492,26 @@ if __name__ == "__main__":
                     file_types=["audio"],
                     label="Upload Audio File(s)",
                 )
+                staged_paths = gr.Textbox(
+                    label="Staged File Paths (Optional)",
+                    placeholder="/app/inputs/*.wav\n/app/inputs/song_a.flac",
+                    lines=2,
+                )
+                list_staged_button = gr.Button("List Staged Files")
+                staged_preview = gr.Markdown("No staged files listed yet.")
                 steps = gr.Slider(minimum=10, maximum=200, value=50, step=10, label="Steps (Quality)")
                 cutoff_choice = gr.Dropdown(
                     choices=["4kHz", "14kHz", "16kHz"],
                     value="14kHz",
                     label="Input Lowpass Filter (Cutoff)",
                 )
-                batch_size = gr.Slider(minimum=1, maximum=4, value=4, step=1, label="Inference Batch Size")
+                batch_size = gr.Slider(
+                    minimum=UI_BATCH_MIN,
+                    maximum=UI_BATCH_MAX,
+                    value=UI_BATCH_DEFAULT,
+                    step=1,
+                    label="Inference Batch Size",
+                )
                 run_button = gr.Button("Process Batch", variant="primary")
                 summary = gr.Markdown("No files processed yet.")
                 download_files = gr.Files(label="Download Restored Result(s)")
@@ -423,7 +524,7 @@ if __name__ == "__main__":
 
         run_button.click(
             fn=process_batch,
-            inputs=[input_files, steps, cutoff_choice, batch_size],
+            inputs=[input_files, staged_paths, steps, cutoff_choice, batch_size],
             outputs=[
                 download_files,
                 gallery,
@@ -436,10 +537,21 @@ if __name__ == "__main__":
             ],
         )
 
+        list_staged_button.click(
+            fn=list_staged_files,
+            inputs=[staged_paths],
+            outputs=[staged_preview],
+        )
+
         preview_choice.change(
             fn=select_preview,
             inputs=[preview_choice, restored_state, plot_state],
             outputs=[preview_audio, preview_plot],
         )
 
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        theme=gr.themes.Default(),
+        css=custom_css,
+    )
