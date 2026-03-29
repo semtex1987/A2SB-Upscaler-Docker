@@ -425,9 +425,9 @@ class STFTBridgeModel(LightningModule):
         inpainted_audio = self.vocode_stft(x_0s[-1].cpu())
         metrics = ssr_eval.metrics.AudioMetrics(rate=self.sampling_rate)
 
-        for idx in range(n_samples):
-            result = metrics.evaluation(inpainted_audio[idx].cpu().numpy(), batch['x_0_wav'][idx].cpu().numpy(), None)
-            self.test_results[dataloader_idx].append(result)
+        self.test_results[dataloader_idx].extend(
+            [metrics.evaluation(inpainted_audio[idx].cpu().numpy(), batch['x_0_wav'][idx].cpu().numpy(), None) for idx in range(n_samples)]
+        )
 
     def on_test_end(self):
         for dataloader_idx, test_results_idx in self.test_results.items():
