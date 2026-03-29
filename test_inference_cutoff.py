@@ -32,12 +32,14 @@ class TestInferenceCutoffUnits(unittest.TestCase):
         app.os.path.exists = MagicMock(return_value=True)
         app.is_likely_corrupted_audio = MagicMock(return_value=False)
 
-        app.run_a2sb_inference('/tmp/in.wav', '/tmp/out.wav', 50, 14000)
+        app.run_a2sb_inference('/tmp/in.wav', '/tmp/out.wav', 50, 14000, 2)
 
         args, _ = app.subprocess.run.call_args
         cmd = args[0]
         self.assertIn('-c', cmd)
         self.assertEqual(cmd[cmd.index('-c') + 1], '14000')
+        self.assertIn('-b', cmd)
+        self.assertEqual(cmd[cmd.index('-b') + 1], '2')
 
 
 if __name__ == '__main__':

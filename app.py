@@ -111,7 +111,7 @@ def generate_comparison_plot(original_path, restored_path):
 
 # --- Inference Functions ---
 
-def run_a2sb_inference(input_path, output_path, steps, cutoff_hz):
+def run_a2sb_inference(input_path, output_path, steps, cutoff_hz, batch_size):
     script_name = "A2SB_upsample_api.py"
 
     # UpsampleMask computes FFT bin indices via (n_fft * freq / sampling_rate),
@@ -122,6 +122,7 @@ def run_a2sb_inference(input_path, output_path, steps, cutoff_hz):
         "-o", output_path,
         "-n", str(int(steps)),
         "-c", str(int(cutoff_hz)),
+        "-b", str(int(batch_size)),
     ]
 
     env = os.environ.copy()
@@ -208,90 +209,120 @@ def ensure_a2sb_input_format(segment):
 
 # --- Main Logic with Progress ---
 
-def restore_audio(input_file, steps, cutoff_choice, progress=gr.Progress()):
-    if not input_file:
-        return None, None
+def normalize_input_files(input_files):
+    if not input_files:
+        return []
+    if isinstance(input_files, str):
+        return [input_files]
+    return list(input_files)
 
-    # Step 1: Initialization
-    progress(0.05, desc="Initializing & Loading Audio...")
-    cutoff_hz = int(cutoff_choice.lower().replace("khz", "")) * 1000
-    
+
+def restore_one_audio(input_file, steps, cutoff_hz, batch_size, progress, file_index, total_files):
     try:
         audio = AudioSegment.from_file(input_file)
         audio = ensure_a2sb_input_format(audio)
     except Exception as e:
         raise gr.Error(f"Failed to load audio: {e}")
 
-    # Create safe base name
-    base_name = os.path.splitext(os.path.basename(input_file))[0]
-    base_name = base_name.replace(" ", "_") # Sanitize spaces
-    
+    base_name = os.path.splitext(os.path.basename(input_file))[0].replace(" ", "_")
     final_output_path = os.path.join(OUTPUT_DIR, f"{base_name}_restored.wav")
     comparison_input_path = os.path.join(INPUT_DIR, f"{base_name}_filtered_input.wav")
 
-    # Helper for channel processing
+    file_start = file_index / total_files
+    file_end = (file_index + 1) / total_files
+
+    def update_file_progress(relative_value, desc):
+        absolute_value = file_start + ((file_end - file_start) * relative_value)
+        progress(min(max(absolute_value, 0.0), 1.0), desc=desc)
+
     def process_channel(segment, channel_id, display_name, start_prog, end_prog):
         prog_range = end_prog - start_prog
-        
-        # A. Filter
-        progress(start_prog, desc=f"[{display_name}] Applying {cutoff_hz}Hz Filter...")
+        update_file_progress(
+            start_prog,
+            f"[{file_index + 1}/{total_files}] [{display_name}] Applying {cutoff_hz}Hz Filter...",
+        )
         filtered = apply_lowpass_to_segment(segment, cutoff_hz)
-        
-        temp_in = os.path.join(INPUT_DIR, f"temp_{channel_id}.wav")
-        temp_out = os.path.join(OUTPUT_DIR, f"temp_{channel_id}_restored.wav")
-        
+
+        temp_in = os.path.join(INPUT_DIR, f"{base_name}_{channel_id}_input.wav")
+        temp_out = os.path.join(OUTPUT_DIR, f"{base_name}_{channel_id}_restored.wav")
+
         if os.path.exists(temp_out):
             os.remove(temp_out)
-            
+
         filtered.export(temp_in, format="wav")
-        
-        # B. Restore
+
         restore_point = start_prog + (prog_range * 0.2)
-        progress(restore_point, desc=f"[{display_name}] Running A2SB Inference...")
-        
-        # Pass cutoff_hz here
-        run_a2sb_inference(temp_in, temp_out, steps, cutoff_hz)
-        
+        update_file_progress(
+            restore_point,
+            f"[{file_index + 1}/{total_files}] [{display_name}] Running A2SB Inference...",
+        )
+
+        run_a2sb_inference(temp_in, temp_out, steps, cutoff_hz, batch_size)
+
         if not os.path.exists(temp_out):
-             raise Exception(f"Inference script failed to generate {temp_out}")
-        
+            raise Exception(f"Inference script failed to generate {temp_out}")
+
         return temp_out, filtered
 
+    final_filtered_audio = None
+
+    if audio.channels == 1:
+        restored_path, filtered_seg = process_channel(audio, "mono", "Mono Channel", 0.1, 0.9)
+        final_filtered_audio = filtered_seg
+        AudioSegment.from_file(restored_path).export(final_output_path, format="wav")
+
+    elif audio.channels == 2:
+        update_file_progress(0.1, f"[{file_index + 1}/{total_files}] Splitting Stereo Channels...")
+        channels = audio.split_to_mono()
+
+        out_l_path, filtered_l = process_channel(channels[0], "left", "Left Channel", 0.15, 0.5)
+        out_r_path, filtered_r = process_channel(channels[1], "right", "Right Channel", 0.5, 0.85)
+
+        update_file_progress(0.85, f"[{file_index + 1}/{total_files}] Recombining Stereo Channels...")
+        restored_l = AudioSegment.from_file(out_l_path)
+        restored_r = AudioSegment.from_file(out_r_path)
+
+        restored_stereo = AudioSegment.from_mono_audiosegments(restored_l, restored_r)
+        restored_stereo.export(final_output_path, format="wav")
+
+        final_filtered_audio = AudioSegment.from_mono_audiosegments(filtered_l, filtered_r)
+
+    else:
+        raise gr.Error(f"Unsupported channels: {audio.channels}")
+
+    update_file_progress(0.9, f"[{file_index + 1}/{total_files}] Generating Spectral Analysis...")
+    final_filtered_audio.export(comparison_input_path, format="wav")
+    plot_path = generate_comparison_plot(comparison_input_path, final_output_path)
+    update_file_progress(1.0, f"[{file_index + 1}/{total_files}] Done!")
+    return final_output_path, plot_path
+
+
+def restore_audio(input_files, steps, cutoff_choice, batch_size, progress=gr.Progress()):
+    files = normalize_input_files(input_files)
+    if not files:
+        return None, None
+
+    cutoff_hz = int(cutoff_choice.lower().replace("khz", "")) * 1000
+    restored_outputs = []
+    plot_outputs = []
+
     try:
-        final_filtered_audio = None
+        for idx, input_file in enumerate(files):
+            progress(idx / len(files), desc=f"[{idx + 1}/{len(files)}] Initializing & Loading Audio...")
+            restored_path, plot_path = restore_one_audio(
+                input_file,
+                steps,
+                cutoff_hz,
+                batch_size,
+                progress,
+                idx,
+                len(files),
+            )
+            restored_outputs.append(restored_path)
+            plot_outputs.append(plot_path)
 
-        if audio.channels == 1:
-            restored_path, filtered_seg = process_channel(audio, "mono", "Mono Channel", 0.1, 0.9)
-            final_filtered_audio = filtered_seg
-            subprocess.run(["cp", restored_path, final_output_path])
-
-        elif audio.channels == 2:
-            progress(0.1, desc="Splitting Stereo Channels...")
-            channels = audio.split_to_mono()
-            
-            out_l_path, filtered_l = process_channel(channels[0], "left", "Left Channel", 0.15, 0.5)
-            out_r_path, filtered_r = process_channel(channels[1], "right", "Right Channel", 0.5, 0.85)
-
-            progress(0.85, desc="Recombining Stereo Channels...")
-            restored_l = AudioSegment.from_file(out_l_path)
-            restored_r = AudioSegment.from_file(out_r_path)
-            
-            restored_stereo = AudioSegment.from_mono_audiosegments(restored_l, restored_r)
-            restored_stereo.export(final_output_path, format="wav")
-            
-            final_filtered_audio = AudioSegment.from_mono_audiosegments(filtered_l, filtered_r)
-
-        else:
-            raise gr.Error(f"Unsupported channels: {audio.channels}")
-            
-        # Step 3: Analysis
-        progress(0.9, desc="Generating Spectral Analysis...")
-        final_filtered_audio.export(comparison_input_path, format="wav")
-        plot_path = generate_comparison_plot(comparison_input_path, final_output_path)
-
-        # Step 4: Finalize
-        progress(1.0, desc="Done!")
-        return final_output_path, plot_path
+        progress(1.0, desc=f"Finished processing {len(files)} file(s)")
+        return restored_outputs, plot_outputs
 
     except subprocess.CalledProcessError as e:
         print("STDERR:", e.stderr)
@@ -300,24 +331,115 @@ def restore_audio(input_file, steps, cutoff_choice, progress=gr.Progress()):
         print("Error:", str(e))
         raise gr.Error(f"Processing error: {str(e)}")
 
+
+def summarize_results(restored_outputs):
+    if not restored_outputs:
+        return "No files processed yet."
+    lines = [f"Processed {len(restored_outputs)} file(s):"]
+    for path in restored_outputs:
+        lines.append(f"- {os.path.basename(path)}")
+    return "\n".join(lines)
+
+
+def build_preview_choices(restored_outputs):
+    return [os.path.basename(path) for path in restored_outputs]
+
+
+def select_preview(selection, restored_outputs, plot_outputs):
+    if not selection or not restored_outputs:
+        return None, None
+
+    choices = build_preview_choices(restored_outputs)
+    try:
+        selected_index = choices.index(selection)
+    except ValueError:
+        selected_index = 0
+
+    return restored_outputs[selected_index], plot_outputs[selected_index]
+
+
+def process_batch(input_files, steps, cutoff_choice, batch_size, progress=gr.Progress()):
+    restored_outputs, plot_outputs = restore_audio(
+        input_files,
+        steps,
+        cutoff_choice,
+        batch_size,
+        progress=progress,
+    )
+
+    preview_choices = build_preview_choices(restored_outputs)
+    initial_selection = preview_choices[0] if preview_choices else None
+    preview_audio, preview_plot = select_preview(initial_selection, restored_outputs, plot_outputs)
+
+    return (
+        restored_outputs,
+        plot_outputs,
+        summarize_results(restored_outputs),
+        gr.update(choices=preview_choices, value=initial_selection),
+        restored_outputs,
+        plot_outputs,
+        preview_audio,
+        preview_plot,
+    )
+
 # --- Interface ---
 
 if __name__ == "__main__":
     custom_css = "body { background-color: #121212; color: white; }"
+    with gr.Blocks(theme=gr.themes.Default(), css=custom_css) as demo:
+        gr.Markdown("# NVIDIA A2SB Stereo Restorer")
+        gr.Markdown(
+            "Upload one or many audio files to restore them sequentially. "
+            "Lower batch size reduces VRAM usage at the cost of longer inference time."
+        )
 
-    iface = gr.Interface(
-        fn=restore_audio,
-        inputs=[
-            gr.Audio(type="filepath", label="Upload Audio"),
-            gr.Slider(minimum=10, maximum=200, value=50, step=10, label="Steps (Quality)"),
-            gr.Dropdown(choices=["4kHz", "14kHz", "16kHz"], value="14kHz", label="Input Lowpass Filter (Cutoff)")
-        ],
-        outputs=[
-            gr.Audio(label="Restored Result"),
-            gr.Image(label="Spectral Analysis (Before vs After)")
-        ],
-        title="NVIDIA A2SB Stereo Restorer",
-        description="Upload audio to simulate bandwidth loss and restore it. Progress bar tracks splitting, restoring, and analysis steps.",
-    )
+        restored_state = gr.State([])
+        plot_state = gr.State([])
 
-    iface.launch(server_name="0.0.0.0", server_port=7860, css=custom_css)
+        with gr.Row():
+            with gr.Column(scale=1):
+                input_files = gr.File(
+                    file_count="multiple",
+                    type="filepath",
+                    file_types=["audio"],
+                    label="Upload Audio File(s)",
+                )
+                steps = gr.Slider(minimum=10, maximum=200, value=50, step=10, label="Steps (Quality)")
+                cutoff_choice = gr.Dropdown(
+                    choices=["4kHz", "14kHz", "16kHz"],
+                    value="14kHz",
+                    label="Input Lowpass Filter (Cutoff)",
+                )
+                batch_size = gr.Slider(minimum=1, maximum=4, value=4, step=1, label="Inference Batch Size")
+                run_button = gr.Button("Process Batch", variant="primary")
+                summary = gr.Markdown("No files processed yet.")
+                download_files = gr.Files(label="Download Restored Result(s)")
+
+            with gr.Column(scale=1):
+                preview_choice = gr.Dropdown(choices=[], label="Preview Restored File", interactive=True)
+                preview_audio = gr.Audio(label="Restored Preview")
+                preview_plot = gr.Image(label="Spectral Analysis")
+                gallery = gr.Gallery(label="All Spectrograms", columns=2, height="auto")
+
+        run_button.click(
+            fn=process_batch,
+            inputs=[input_files, steps, cutoff_choice, batch_size],
+            outputs=[
+                download_files,
+                gallery,
+                summary,
+                preview_choice,
+                restored_state,
+                plot_state,
+                preview_audio,
+                preview_plot,
+            ],
+        )
+
+        preview_choice.change(
+            fn=select_preview,
+            inputs=[preview_choice, restored_state, plot_state],
+            outputs=[preview_audio, preview_plot],
+        )
+
+    demo.launch(server_name="0.0.0.0", server_port=7860)

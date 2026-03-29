@@ -10,3 +10,4 @@ inputs/
 outputs/
 training_data/
 training_output/
+deploy.sh

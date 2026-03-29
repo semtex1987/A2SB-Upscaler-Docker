@@ -62,7 +62,13 @@ def compute_rolloff_freq(audio_file, roll_percent=0.99):
     return rolloff
 
 
-def upsample_one_sample(audio_filename, output_audio_filename, predict_n_steps=50, explicit_cutoff=None):
+def upsample_one_sample(
+    audio_filename,
+    output_audio_filename,
+    predict_n_steps=50,
+    explicit_cutoff=None,
+    predict_batch_size=4,
+):
 
     assert output_audio_filename != audio_filename, "output filename cannot be input filename"
 
@@ -104,8 +110,14 @@ def upsample_one_sample(audio_filename, output_audio_filename, predict_n_steps=5
             -c configs/ensemble_2split_sampling.yaml \
             -c {} \
             --model.predict_n_steps={} \
+            --model.predict_batch_size={} \
             --model.output_audio_filename={}; \
-        cd inference/".format(temporary_yaml_file.replace('../', ''), predict_n_steps, output_audio_filename)
+        cd inference/".format(
+            temporary_yaml_file.replace('../', ''),
+            predict_n_steps,
+            predict_batch_size,
+            output_audio_filename,
+        )
     shell_run_cmd(cmd)
 
     if os.path.exists(temporary_yaml_file):
@@ -118,6 +130,7 @@ def main():
     parser.add_argument('-o','--output_audio_filename', type=str, help='path to save upsampled audio', required=True)
     parser.add_argument('-n','--predict_n_steps', type=int, help='number of sampling steps', default=50)
     parser.add_argument('-c','--cutoff', type=float, help='Explicit cutoff frequency in Hz', default=None)
+    parser.add_argument('-b','--batch_size', type=int, help='Predict batch size', default=4)
     args = parser.parse_args()
 
     upsample_one_sample(
@@ -125,6 +138,7 @@ def main():
         output_audio_filename=args.output_audio_filename,
         predict_n_steps=args.predict_n_steps,
         explicit_cutoff=args.cutoff,
+        predict_batch_size=args.batch_size,
     )
 
 
