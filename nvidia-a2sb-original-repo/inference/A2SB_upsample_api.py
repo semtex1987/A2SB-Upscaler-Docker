@@ -16,7 +16,7 @@ import numpy as np
 import json
 import argparse
 import glob
-from subprocess import Popen, PIPE
+import subprocess
 import yaml
 import time 
 from datetime import datetime
@@ -45,12 +45,25 @@ def save_yaml(data, prefix="../configs/temp"):
     return file_name
 
 
-def shell_run_cmd(cmd):
-    print('running:', cmd)
-    p = Popen(cmd, stdout=PIPE, stderr=PIPE, shell=True)
-    stdout, stderr = p.communicate()
-    print(stdout)
-    print(stderr)
+def shell_run_cmd(cmd, cwd=None):
+    print('running:', " ".join(cmd))
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=cwd,
+        check=False,
+    )
+    if result.stdout:
+        print(result.stdout)
+    if result.stderr:
+        print(result.stderr)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Command failed with exit code {result.returncode}: {' '.join(cmd)}\n"
+            f"stderr:\n{result.stderr}"
+        )
 
 
 def compute_rolloff_freq(audio_file, roll_percent=0.99):
@@ -67,7 +80,7 @@ def upsample_one_sample(
     output_audio_filename,
     predict_n_steps=50,
     explicit_cutoff=None,
-    predict_batch_size=4,
+    predict_batch_size=16,
 ):
 
     assert output_audio_filename != audio_filename, "output filename cannot be input filename"
@@ -105,20 +118,17 @@ def upsample_one_sample(
     inference_config['data']['eval_transforms_aug'] = base_transform_list
     temporary_yaml_file = save_yaml(inference_config)
 
-    cmd = "cd ../; \
-        python ensembled_inference_api.py predict \
-            -c configs/ensemble_2split_sampling.yaml \
-            -c {} \
-            --model.predict_n_steps={} \
-            --model.predict_batch_size={} \
-            --model.output_audio_filename={}; \
-        cd inference/".format(
-            temporary_yaml_file.replace('../', ''),
-            predict_n_steps,
-            predict_batch_size,
-            output_audio_filename,
-        )
-    shell_run_cmd(cmd)
+    cmd = [
+        "python",
+        "ensembled_inference_api.py",
+        "predict",
+        "-c", "configs/ensemble_2split_sampling.yaml",
+        "-c", temporary_yaml_file.replace('../', ''),
+        f"--model.predict_n_steps={predict_n_steps}",
+        f"--model.predict_batch_size={predict_batch_size}",
+        f"--model.output_audio_filename={output_audio_filename}",
+    ]
+    shell_run_cmd(cmd, cwd="../")
 
     if os.path.exists(temporary_yaml_file):
         os.remove(temporary_yaml_file)
@@ -130,7 +140,7 @@ def main():
     parser.add_argument('-o','--output_audio_filename', type=str, help='path to save upsampled audio', required=True)
     parser.add_argument('-n','--predict_n_steps', type=int, help='number of sampling steps', default=50)
     parser.add_argument('-c','--cutoff', type=float, help='Explicit cutoff frequency in Hz', default=None)
-    parser.add_argument('-b','--batch_size', type=int, help='Predict batch size', default=4)
+    parser.add_argument('-b','--batch_size', type=int, help='Predict batch size', default=16)
     args = parser.parse_args()
 
     upsample_one_sample(
