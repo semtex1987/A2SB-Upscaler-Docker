@@ -113,7 +113,8 @@ class TimePartitionedPretrainedSTFTBridgeModel(LightningModule):
     def ddpm_sample(self, x_1, t_steps=None, mask=None, mask_pred_x0=True,
                     win_length=256,
                     hop_length=256,
-                    batch_size=16
+                    batch_size=16,
+                    save_all_intermediates=False,
                     ):
         """
         win_length: temporal window length of input spectrogram
@@ -127,7 +128,7 @@ class TimePartitionedPretrainedSTFTBridgeModel(LightningModule):
 
         x_t = x_1.clone()
         pred_x0 = None
-        all_pred_x0s = []
+        all_pred_x0s = [] if save_all_intermediates else None
 
         for t_idx in range(n_steps):
             # print(t_idx)
@@ -143,7 +144,8 @@ class TimePartitionedPretrainedSTFTBridgeModel(LightningModule):
             if mask is not None and mask_pred_x0:
                 pred_x0 = pred_x0 * mask + (1-mask) * x_1
 
-            all_pred_x0s.append(pred_x0.cpu())
+            if save_all_intermediates:
+                all_pred_x0s.append(pred_x0.cpu())
             x_t_prev = self.ddpm.p_posterior(t_prev, t, x_t, pred_x0, ot_ode=self.use_ot_ode)
             x_t = x_t_prev
             if mask is not None:
@@ -152,8 +154,10 @@ class TimePartitionedPretrainedSTFTBridgeModel(LightningModule):
                     std_sb = self.ddpm.get_std_t(t_prev)
                     xt_true = xt_true + std_sb * torch.randn_like(xt_true)
                 x_t = (1. - mask) * xt_true + mask * x_t
-        all_pred_x0s = [multidiffusion_unpad_outputs(pred, original_width) for pred in all_pred_x0s]
-        return all_pred_x0s
+        if save_all_intermediates:
+            all_pred_x0s = [multidiffusion_unpad_outputs(pred, original_width) for pred in all_pred_x0s]
+            return all_pred_x0s
+        return [multidiffusion_unpad_outputs(pred_x0, original_width)]
     
     @torch.no_grad()
     def fast_inpaint_ddpm_sample(self, x_1, t_steps=None, mask=None, mask_pred_x0=True,
