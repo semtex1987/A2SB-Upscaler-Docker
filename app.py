@@ -87,9 +87,9 @@ def generate_comparison_plot(original_path, restored_path):
     """
     Generates a side-by-side Mel-spectrogram comparison.
     """
-    # Load audio files
-    y_orig, sr_orig = librosa.load(original_path)
-    y_rest, sr_rest = librosa.load(restored_path)
+    # Load audio files (sr=None prevents expensive ~25s downsampling to 22050Hz)
+    y_orig, sr_orig = librosa.load(original_path, sr=None)
+    y_rest, sr_rest = librosa.load(restored_path, sr=None)
 
     # Compute Mel Spectrograms
     # Use the restored sample rate as the max freq reference for both plots so they match visually

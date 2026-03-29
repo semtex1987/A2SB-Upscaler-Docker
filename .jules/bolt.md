@@ -1,0 +1,3 @@
+## 2024-05-24 - librosa.load default sample rate penalty
+**Learning:** `librosa.load()` defaults to `sr=22050`. If the audio is 44.1kHz (as required by A2SB), it will perform a very expensive resampling operation during load. This not only takes orders of magnitude longer (25s vs 0.01s for a 30s file) but it also inadvertently low-passes the audio, hiding the high-frequency restoration that the A2SB model just performed when visualizing the spectrograms.
+**Action:** Always use `librosa.load(path, sr=None)` when loading audio files where the native sample rate should be preserved, especially when generating visual comparisons of bandwidth extension models.
