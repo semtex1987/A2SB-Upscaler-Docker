@@ -153,7 +153,7 @@ class MixAudioDataset(torch.utils.data.Dataset):
 
         audio = audio[crop_start:crop_start+self.segment_length]
         if len(audio) < self.segment_length:
-            audio = np.append(audio, [0] * (self.segment_length - len(audio)))
+            audio = np.pad(audio, (0, self.segment_length - len(audio)), 'constant')
 
         audio = torch.from_numpy(audio).float()
         # FIXME: might be good to add better normalization here
