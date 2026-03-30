@@ -106,24 +106,9 @@ class TimePartitionedPretrainedSTFTBridgeModel(LightningModule):
                     batch_size=16
                     ):
         """
-                    Performs reverse DDPM sampling on a (possibly multidiffusion-padded) spectrogram to produce predicted clean spectrograms for each reverse timestep.
-                    
-                    Parameters:
-                        x_1 (Tensor): Corrupted/target spectrogram tensor; will be padded internally for multidiffusion.
-                        t_steps (Tensor): Tensor of shape (batch, n_steps+1) containing the reverse time schedule.
-                        mask (Tensor or None): Binary mask (same spatial dims as x_1) indicating regions to preserve (1) vs inpaint (0); will be padded to match x_1 when provided.
-                        mask_pred_x0 (bool): If True, blend each step's predicted x0 with the (padded) clean input using the mask before posterior sampling.
-                        win_length (int): Temporal window length used for multidiffusion padding.
-                        hop_length (int): Temporal hop between windows; must be <= win_length.
-                        batch_size (int): Batch size used when computing the value-function over multidiffusion windows.
-                    
-                    Returns:
-                        list[Tensor]: A list of length n_steps (where n_steps = t_steps.shape[1] - 1). Each entry is the predicted x0 tensor for that reverse step, unpadded back to the original temporal width.
-                    
-                    Notes:
-                        - Asserts hop_length <= win_length.
-                        - When a mask is provided and mask_pred_x0 is True, predictions are blended with the clean target inside masked regions; when not using OT-ODE, enforced masked regions may be perturbed with Gaussian noise whose scale depends on the next timestep's variance.
-                    """
+        win_length: temporal window length of input spectrogram
+        hop_length: step size. If hop_length < win_length, we use multidiffusion
+        """
         assert hop_length <= win_length
         n_steps = t_steps.shape[1] - 1
         original_width = x_1.shape[-1]
@@ -257,20 +242,6 @@ class STFTBridgeModel(LightningModule):
         return optimizer
 
     def ddpm_sample(self, x_1, t_steps=None, mask=None, mask_pred_x0=True):
-        """
-        Perform reverse diffusion to produce predicted clean signals at each sampling step using the model's value function.
-        
-        This runs a discrete reverse-time loop over the provided time schedule, producing the model's predicted x0 at each step and applying optional masking behavior to enforce known (clean) regions.
-        
-        Parameters:
-            x_1 (torch.Tensor): Batched initial noisy/corrupted input in latent space (shape: batch x ...).
-            t_steps (torch.Tensor): Time schedule tensor of shape (batch, n_steps+1) where each column is a timestep along the reverse trajectory.
-            mask (torch.Tensor, optional): Binary tensor with the same spatial shape as x_1 where 1 marks regions to preserve from the diffusion state and 0 marks regions to overwrite with clean data. If provided, masking is applied during sampling.
-            mask_pred_x0 (bool, optional): If True, blend each predicted x0 with the clean target x_1 according to `mask` before posterior sampling.
-        
-        Returns:
-            list[torch.Tensor]: A list of length n_steps containing the model's predicted x0 tensors for each reverse step. Each entry is moved to CPU.
-        """
         n_steps = t_steps.shape[1] - 1
 
         x_t = x_1.clone()
@@ -307,19 +278,6 @@ class STFTBridgeModel(LightningModule):
         return all_pred_x0s
     
     def ddpm_sample_i2sb_way(self, x_1, t_steps=None, mask=None):
-        """
-        Run a reverse DDPM denoising chain and return the predicted clean signals at each reverse step.
-        
-        Performs the reverse diffusion loop using the module's value-function model and diffusion utilities, applying mask-constrained mixing after each posterior update when `mask` is provided. When not using OT-ODE, masked (known) regions are drawn from the forward-noise posterior (Gaussian) before mixing.
-        
-        Parameters:
-            x_1 (torch.Tensor): Batched input tensor (corrupted/noisy observations) to start reverse sampling from.
-            t_steps (torch.Tensor): Timesteps for the reverse trajectory; shape should allow indexing as t_steps[:, i] and contain n_steps+1 entries along axis 1.
-            mask (torch.Tensor, optional): Binary mask with 1 indicating regions to preserve from the reverse trajectory and 0 indicating regions replaced by the known/true signal (with optional forward-noise sampling when OT-ODE is disabled).
-        
-        Returns:
-            list[torch.Tensor]: Length-n_steps list of predicted x0 tensors (moved to CPU) for each reverse step, in temporal order.
-        """
         n_steps = t_steps.shape[1] - 1
 
         x_t = x_1.clone()
@@ -358,19 +316,6 @@ class STFTBridgeModel(LightningModule):
         return all_pred_x0s
 
     def ddpm_sample_i2sb_change_order(self, x_1, t_steps=None, mask=None):
-        """
-        Run reverse DDPM sampling and return the sequence of predicted clean signals at each reverse step.
-        
-        Performs a reverse diffusion loop using the module's value-function model. At each step the model predicts x0; if `mask` is provided the prediction is blended with a (possibly noise-perturbed) ground-truth x_1 before applying the posterior update. When `use_ot_ode` is False, the blended ground-truth is perturbed with Gaussian noise whose std is computed from the diffusion schedule.
-        
-        Parameters:
-            x_1 (Tensor): Clean / target tensor used for masked regions.
-            t_steps (Tensor): Time schedule tensor with shape (batch, n_steps+1) where consecutive columns define the reverse steps.
-            mask (Tensor, optional): Binary mask broadcastable to x_1 where value `1` preserves model prediction and `0` replaces it with (possibly noised) x_1 before the posterior update.
-        
-        Returns:
-            list[Tensor]: Length `n_steps` list of `pred_x0` tensors (moved to CPU) in reverse-step order (earliest reverse step first).
-        """
         n_steps = t_steps.shape[1] - 1
 
         x_t = x_1.clone()

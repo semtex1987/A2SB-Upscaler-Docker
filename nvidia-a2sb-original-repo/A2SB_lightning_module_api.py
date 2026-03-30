@@ -116,22 +116,9 @@ class TimePartitionedPretrainedSTFTBridgeModel(LightningModule):
                     batch_size=16
                     ):
         """
-                    Run DDPM sampling using windowed (multidiffusion) processing and return the predicted clean spectrograms at each diffusion step.
-                    
-                    The input is padded into overlapping windows when hop_length < win_length and processed by a time-bounded velocity-field model at each step. If a mask is provided, known regions are enforced either on the predicted x0 (when mask_pred_x0=True) or on the updated noisy state after each step.
-                    
-                    Parameters:
-                        x_1 (torch.Tensor): Noisy / corrupted spectrogram input (batch-first). Last dimension is time width.
-                        t_steps (torch.Tensor): Diffusion schedule of shape (batch, n_steps) where consecutive columns are used as (t, t_prev) pairs.
-                        mask (torch.Tensor or None): Binary mask with the same spatial shape as x_1 indicating known regions (1 = known). May be None.
-                        mask_pred_x0 (bool): If True, replace predicted clean values in masked regions with the known input before the posterior update.
-                        win_length (int): Temporal window length used for windowed (multidiffusion) model evaluation.
-                        hop_length (int): Step between window starts; must be <= win_length.
-                        batch_size (int): Windowed batch size used when computing multidiffusion velocity-field outputs.
-                    
-                    Returns:
-                        list[torch.Tensor]: Length n_steps list of predicted clean spectrogram tensors (one per diffusion step). Each tensor is unpadded back to the original input width.
-                    """
+        win_length: temporal window length of input spectrogram
+        hop_length: step size. If hop_length < win_length, we use multidiffusion
+        """
         assert hop_length <= win_length
         n_steps = t_steps.shape[1] - 1
         original_width = x_1.shape[-1]
@@ -266,18 +253,6 @@ class STFTBridgeModel(LightningModule):
         return optimizer
 
     def ddpm_sample(self, x_1, t_steps=None, mask=None, mask_pred_x0=True):
-        """
-        Run the DDPM denoising chain and produce predicted clean representations (`x0`) for each sampling step.
-        
-        Parameters:
-            x_1 (torch.Tensor): Initial noisy input (usually the corrupted or noisy spectrogram-like tensor).
-            t_steps (torch.Tensor): 2D tensor of time steps with shape [batch, n_steps], where sampling proceeds from t_steps[:,0] to t_steps[:,-1].
-            mask (torch.Tensor, optional): Binary mask with the same spatial shape as `x_1` where `1` indicates regions to preserve from the model state and `0` indicates known/ground-truth regions. When provided, known regions are enforced at each step.
-            mask_pred_x0 (bool, optional): If true and `mask` is provided, blend model-predicted `x0` with known regions from `x_1` before posterior update.
-        
-        Returns:
-            list[torch.Tensor]: List of length `n_steps` containing the predicted `x0` tensors (moved to CPU) for each sampling step in temporal order.
-        """
         n_steps = t_steps.shape[1] - 1
 
         x_t = x_1.clone()
@@ -314,17 +289,6 @@ class STFTBridgeModel(LightningModule):
         return all_pred_x0s
     
     def ddpm_sample_i2sb_way(self, x_1, t_steps=None, mask=None):
-        """
-        Run reverse DDPM sampling applying the inpainting mask after each posterior update.
-        
-        Parameters:
-            x_1 (torch.Tensor): Initial (corrupted) spectrogram-like tensor used as the known-region reference.
-            t_steps (torch.Tensor): Time schedule of shape [batch, n_steps]; sampling proceeds from t_steps[:,0] to t_steps[:,-1].
-            mask (torch.Tensor, optional): Binary mask with the same spatial shape as `x_1` where 1.0 marks regions to use the model's prediction (to be inpainted) and 0.0 marks known regions that should be preserved from `x_1`.
-        
-        Returns:
-            list[torch.Tensor]: Length `n_steps` list of CPU tensors; the element at index i is the model's predicted clean representation (`x0`) corresponding to the i-th sampling step.
-        """
         n_steps = t_steps.shape[1] - 1
 
         x_t = x_1.clone()
@@ -363,17 +327,6 @@ class STFTBridgeModel(LightningModule):
         return all_pred_x0s
 
     def ddpm_sample_i2sb_change_order(self, x_1, t_steps=None, mask=None):
-        """
-        Produce predicted clean representations for each reverse diffusion step, applying mask-based inpainting to the predictions before computing the posterior update.
-        
-        Parameters:
-            x_1 (torch.Tensor): Initial corrupted or noisy input tensor.
-            t_steps (torch.Tensor): Time schedule tensor with shape (batch, n_steps) specifying diffusion times from current to previous.
-            mask (torch.Tensor, optional): Binary mask with same spatial shape as x_1 where values of `1` indicate locations to keep the model prediction and values of `0` indicate locations to overwrite with the original/true signal during sampling.
-        
-        Returns:
-            list[torch.Tensor]: A list of length `n_steps` of CPU tensors, where each element is the predicted clean representation (`x0`) produced at the corresponding reverse diffusion step.
-        """
         n_steps = t_steps.shape[1] - 1
 
         x_t = x_1.clone()
