@@ -2,6 +2,26 @@ import torch
 import time
 
 def run_benchmark(n_steps=1000, batch_size=1):
+    """
+    Measure wall-clock timings for three methods of collecting tensors moved to CPU.
+    
+    Benchmarks:
+    - appending CPU tensors to a dynamically growing Python list,
+    - assigning CPU tensors into a pre-allocated Python list,
+    - assigning CPU tensors into a pre-allocated CPU tensor.
+    
+    Parameters:
+        n_steps (int): Number of tensors to generate and collect for each benchmark.
+        batch_size (int): Batch size used when creating random tensors (shape: (batch_size, 3, 256, 256)).
+    
+    Returns:
+        tuple: (append_time, prelist_time)
+            append_time — elapsed seconds for the dynamic list append benchmark.
+            prelist_time — elapsed seconds for the pre-allocated list benchmark.
+    
+    Notes:
+        The timing for the pre-allocated CPU tensor assignment is printed but not returned.
+    """
     shape = (batch_size, 3, 256, 256)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
