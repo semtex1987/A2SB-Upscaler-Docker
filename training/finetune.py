@@ -34,11 +34,17 @@ MAIN_PY = APP_ROOT / "main.py"
 
 
 def get_duration(path: str) -> float | None:
+    # ⚡ Bolt Optimization: Use soundfile for O(1) duration lookup instead of librosa's O(N) decoding
     try:
-        import librosa
-        return float(librosa.get_duration(path=path))
+        import soundfile as sf
+        return float(sf.info(path).duration)
     except Exception:
-        return None
+        # Fallback to librosa (which uses audioread for mp3/m4a if soundfile fails)
+        try:
+            import librosa
+            return float(librosa.get_duration(path=path))
+        except Exception:
+            return None
 
 
 def find_audio_files(data_dir: Path) -> list[Path]:
