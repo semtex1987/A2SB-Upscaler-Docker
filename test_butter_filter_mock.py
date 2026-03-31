@@ -24,6 +24,12 @@ import app
 
 
 class TestButterLowpassFilterMock(unittest.TestCase):
+    def setUp(self):
+        # Clear lru_cache for get_butter_sos so tests aren't using cached responses
+        # from a previous test and bypass patched mock behavior
+        if hasattr(app.get_butter_sos, 'cache_clear'):
+            app.get_butter_sos.cache_clear()
+
     def test_butter_lowpass_filter_calls_sosfilt_with_correct_axis(self):
         app.butter = MagicMock(return_value='dummy_sos')
         app.sosfilt = MagicMock(return_value='filtered_data')
