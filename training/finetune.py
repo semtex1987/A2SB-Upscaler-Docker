@@ -33,36 +33,31 @@ CONFIG_SPLIT_2 = TRAINING_DIR / "configs" / "finetune_split2.yaml"
 MAIN_PY = APP_ROOT / "main.py"
 
 
+import soundfile as sf
+import librosa
+import audioread
+
 def get_duration(path: str) -> float | None:
     # ⚡ Bolt Optimization: Use soundfile for O(1) duration lookup instead of librosa's O(N) decoding
-    """
-    Obtain the duration of an audio file in seconds.
-    
-    Returns:
-        float: Duration in seconds if the file's duration can be determined, `None` otherwise.
-    """
-    try:
-        import soundfile as sf
-        return float(sf.info(path).duration)
-    except Exception:
-        # Fallback to librosa (which uses audioread for mp3/m4a if soundfile fails)
+
+    # Extension-aware routing: librosa is needed for mp3/m4a
+    if path.lower().endswith((".mp3", ".m4a")):
         try:
-            import librosa
             return float(librosa.get_duration(path=path))
-        except Exception:
+        except (audioread.NoBackendError, ImportError, OSError, ValueError, TypeError):
+            return None
+
+    try:
+        return float(sf.info(path).duration)
+    except (sf.LibsndfileError, OSError, ValueError, TypeError):
+        # Fallback to librosa
+        try:
+            return float(librosa.get_duration(path=path))
+        except (audioread.NoBackendError, ImportError, OSError, ValueError, TypeError):
             return None
 
 
 def find_audio_files(data_dir: Path) -> list[Path]:
-    """
-    Recursively locate audio files under the given directory that match the configured audio extensions.
-    
-    Parameters:
-        data_dir (Path): Root directory to search. If `data_dir` is not a directory, an empty list is returned.
-    
-    Returns:
-        list[Path]: Sorted list of file paths matching the known audio extensions (AUDIO_EXTENSIONS).
-    """
     out: list[Path] = []
     data_dir = data_dir.resolve()
     if not data_dir.is_dir():
