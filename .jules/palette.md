@@ -1,0 +1,3 @@
+## 2024-05-24 - Contextual Help in Gradio
+**Learning:** Wall-of-text explanations at the top of a Gradio interface increase cognitive load. Placing instructional text directly on the component using the `info` parameter improves discoverability and UX without cluttering the main layout.
+**Action:** Use the `info` parameter on Gradio input components (like Sliders and Dropdowns) for specific guidance rather than generic markdown blocks at the top of the app.
