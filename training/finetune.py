@@ -33,12 +33,28 @@ CONFIG_SPLIT_2 = TRAINING_DIR / "configs" / "finetune_split2.yaml"
 MAIN_PY = APP_ROOT / "main.py"
 
 
+import soundfile as sf
+import librosa
+import audioread
+
 def get_duration(path: str) -> float | None:
+    # ⚡ Bolt Optimization: Use soundfile for O(1) duration lookup instead of librosa's O(N) decoding
+
+    # Extension-aware routing: librosa is needed for mp3/m4a
+    if path.lower().endswith((".mp3", ".m4a")):
+        try:
+            return float(librosa.get_duration(path=path))
+        except (audioread.NoBackendError, ImportError, OSError, ValueError, TypeError):
+            return None
+
     try:
-        import librosa
-        return float(librosa.get_duration(path=path))
-    except Exception:
-        return None
+        return float(sf.info(path).duration)
+    except (sf.LibsndfileError, OSError, ValueError, TypeError):
+        # Fallback to librosa
+        try:
+            return float(librosa.get_duration(path=path))
+        except (audioread.NoBackendError, ImportError, OSError, ValueError, TypeError):
+            return None
 
 
 def find_audio_files(data_dir: Path) -> list[Path]:
