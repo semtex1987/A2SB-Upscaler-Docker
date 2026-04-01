@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import librosa
 import librosa.display
 from scipy.signal import butter, sosfilt
+from functools import lru_cache
 from pydub import AudioSegment
 
 # Directories
@@ -45,6 +46,18 @@ UI_BATCH_DEFAULT = min(max(UI_BATCH_DEFAULT, UI_BATCH_MIN), UI_BATCH_MAX)
 
 # --- Signal Processing Functions ---
 
+@lru_cache(maxsize=32)
+def get_butter_sos(order, normal_cutoff):
+    """
+    ⚡ Bolt: Memoize filter coefficient generation.
+    scipy.signal.butter is computationally expensive relative to the actual
+    filtering (sosfilt). Since we use static cutoff frequencies (e.g. 14kHz)
+    and orders, caching the SOS array eliminates redundant math during batch
+    processing and sequential channel processing.
+    """
+    return butter(order, normal_cutoff, btype='low', analog=False, output='sos')
+
+
 def butter_lowpass_filter(data, cutoff, fs, order=10):
     data_arr = np.asarray(data)
     nyq = 0.5 * fs
@@ -63,7 +76,7 @@ def butter_lowpass_filter(data, cutoff, fs, order=10):
     else:
         data_float = data_arr.astype(np.float32, copy=False)
 
-    sos = butter(order, normal_cutoff, btype='low', analog=False, output='sos')
+    sos = get_butter_sos(order, normal_cutoff)
     filtered = sosfilt(sos, data_float, axis=0)
 
     if not int_dtype:
