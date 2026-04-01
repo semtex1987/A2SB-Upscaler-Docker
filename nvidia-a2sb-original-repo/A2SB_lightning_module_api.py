@@ -70,20 +70,19 @@ class TimePartitionedPretrainedSTFTBridgeModel(LightningModule):
 
     @torch.no_grad()
     def load_t_bounded_checkpoints(self, pretrained_checkpoints, t_cutoffs):
-        loaded_models = []
-        for ckpt in pretrained_checkpoints:
+        def _load_model(ckpt):
             state_dict = torch.load(ckpt, map_location='cpu')['state_dict'] # loads full PTL state dict
             # we just need the vf_model
             # rename keys
             new_state_dict = OrderedDict()
             for key, value in state_dict.items():
                 if 'vf_model' in key: # skip other modules
-                    new_key = key.replace('vf_model.', '')
-                    new_state_dict[new_key] = value
+                    new_state_dict[key.replace('vf_model.', '')] = value
             current_model = copy.deepcopy(self.vf_model)
             current_model.load_state_dict(new_state_dict)
-            loaded_models.append(current_model)
-        self.t_bounded_pretrained_models = nn.ModuleList(loaded_models)
+            return current_model
+
+        self.t_bounded_pretrained_models = nn.ModuleList([_load_model(ckpt) for ckpt in pretrained_checkpoints])
 
     @torch.no_grad()
     def get_vf_model(self, t: float):
