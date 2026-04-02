@@ -1,0 +1,3 @@
+## 2026-04-02 - Localized Component Guidance in Gradio
+**Learning:** Wall-of-text explanations at the top of an app increase cognitive load and hurt discoverability. For unsupported components like `gr.File`, localized `gr.Markdown` adjacent to the component works best, rather than cluttering the main layout or the component's label. Supported components like Textbox and Slider should leverage the `info` parameter.
+**Action:** Avoid large instructional blocks. Distribute help text using the `info` parameter for supported components, and inline `gr.Markdown` immediately before unsupported components to provide contextual guidance.
