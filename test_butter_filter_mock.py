@@ -25,7 +25,7 @@ import app
 
 class TestButterLowpassFilterMock(unittest.TestCase):
     def test_butter_lowpass_filter_calls_sosfilt_with_correct_axis(self):
-        app.butter = MagicMock(return_value='dummy_sos')
+        app._get_butter_sos = MagicMock(return_value='dummy_sos')
         app.sosfilt = MagicMock(return_value='filtered_data')
 
         fake_data = MagicMock()
@@ -41,7 +41,7 @@ class TestButterLowpassFilterMock(unittest.TestCase):
         self.assertEqual(kwargs.get('axis'), 0)
 
     def test_integer_path_clips_before_cast(self):
-        app.butter = MagicMock(return_value='dummy_sos')
+        app._get_butter_sos = MagicMock(return_value='dummy_sos')
 
         fake_data = MagicMock()
         fake_data.dtype = 'int16'
