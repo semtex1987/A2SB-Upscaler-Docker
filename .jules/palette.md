@@ -1,0 +1,3 @@
+## 2025-04-03 - Avoid Wall-of-Text in Gradio
+**Learning:** Gradio interfaces can quickly become cluttered with long instructional markdown blocks at the top. Moving explanations directly onto the relevant components using the `info` parameter (for supported components like Textbox and Slider) or localized Markdown (for components like File that don't support `info`) significantly improves context and discoverability.
+**Action:** Avoid wall-of-text explanations. Use the `info` parameter for supported components to improve discoverability. For components like `gr.File` that lack `info` support, use localized `gr.Markdown` blocks directly adjacent to the component instead of cluttering the main layout or the component's `label`.
