@@ -113,13 +113,16 @@ class TimePartitionedPretrainedSTFTBridgeModel(LightningModule):
         pred_x0 = None
         all_pred_x0s = []
 
+        # ⚡ Bolt: Pre-calculate model references for all timesteps to avoid lookup overhead in the sampling loop.
+        step_models = [self.get_vf_model(t_steps[0, i].item()) for i in range(n_steps)]
+
         for t_idx in tqdm(range(n_steps)):
             # print(t_idx)
             t_emb = self.t_to_emb(t_steps[:,t_idx]).repeat(x_1.shape[0], 1)
             t = t_steps[:, t_idx]
             t_prev = t_steps[:, t_idx+1]
             #vf_output = self.get_vf_model(t[0].item())(x_t, t_emb)
-            vf_model = self.get_vf_model(t[0].item())
+            vf_model = step_models[t_idx]
             vf_output = get_multidiffusion_vf(vf_model, x_t, t_emb, win_length=win_length,
                                               hop_length=hop_length, batch_size=batch_size
                                               )
