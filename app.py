@@ -12,6 +12,7 @@ import librosa
 import librosa.display
 from scipy.signal import butter, sosfilt
 from pydub import AudioSegment
+import functools
 
 # Directories
 def _ensure_runtime_dir(preferred_path, fallback_name):
@@ -45,6 +46,12 @@ UI_BATCH_DEFAULT = min(max(UI_BATCH_DEFAULT, UI_BATCH_MIN), UI_BATCH_MAX)
 
 # --- Signal Processing Functions ---
 
+# ⚡ Bolt: Cache filter generation since cutoff and fs are usually static.
+# `scipy.signal.butter` is slow, avoiding redundant calculations speeds up filtering, especially for stereo or batch processing.
+@functools.lru_cache(maxsize=128)
+def _get_butter_sos(order, normal_cutoff):
+    return butter(order, normal_cutoff, btype='low', analog=False, output='sos')
+
 def butter_lowpass_filter(data, cutoff, fs, order=10):
     data_arr = np.asarray(data)
     nyq = 0.5 * fs
@@ -63,7 +70,7 @@ def butter_lowpass_filter(data, cutoff, fs, order=10):
     else:
         data_float = data_arr.astype(np.float32, copy=False)
 
-    sos = butter(order, normal_cutoff, btype='low', analog=False, output='sos')
+    sos = _get_butter_sos(order, normal_cutoff)
     filtered = sosfilt(sos, data_float, axis=0)
 
     if not int_dtype:
