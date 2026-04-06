@@ -4,14 +4,6 @@ import os
 import tempfile
 import glob
 import numpy as np
-import matplotlib
-# Use 'Agg' backend to prevent errors in Docker (no display)
-matplotlib.use('Agg') 
-import matplotlib.pyplot as plt
-import librosa
-import librosa.display
-from scipy.signal import butter, sosfilt
-from pydub import AudioSegment
 import functools
 
 # Directories
@@ -50,6 +42,7 @@ UI_BATCH_DEFAULT = min(max(UI_BATCH_DEFAULT, UI_BATCH_MIN), UI_BATCH_MAX)
 # `scipy.signal.butter` is slow, avoiding redundant calculations speeds up filtering, especially for stereo or batch processing.
 @functools.lru_cache(maxsize=128)
 def _get_butter_sos(order, normal_cutoff):
+    from scipy.signal import butter
     return butter(order, normal_cutoff, btype='low', analog=False, output='sos')
 
 def butter_lowpass_filter(data, cutoff, fs, order=10):
@@ -71,6 +64,7 @@ def butter_lowpass_filter(data, cutoff, fs, order=10):
         data_float = data_arr.astype(np.float32, copy=False)
 
     sos = _get_butter_sos(order, normal_cutoff)
+    from scipy.signal import sosfilt
     filtered = sosfilt(sos, data_float, axis=0)
 
     if not int_dtype:
@@ -81,6 +75,7 @@ def butter_lowpass_filter(data, cutoff, fs, order=10):
     return np.round(filtered * peak).astype(data_arr.dtype)
 
 def apply_lowpass_to_segment(segment, cutoff_freq_hz):
+    from pydub import AudioSegment
     channel_data = np.array(segment.get_array_of_samples())
     if segment.channels == 2:
         channel_data = channel_data.reshape((-1, 2))
@@ -91,6 +86,11 @@ def apply_lowpass_to_segment(segment, cutoff_freq_hz):
 # --- Plotting Function (FIXED LAYOUT) ---
 
 def generate_comparison_plot(original_path, restored_path):
+    import librosa
+    import librosa.display
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
     """
     Generates a side-by-side Mel-spectrogram comparison.
     """
@@ -186,6 +186,8 @@ def run_a2sb_inference(input_path, output_path, steps, cutoff_hz, batch_size):
 
 
 def is_likely_corrupted_audio(path):
+    from pydub import AudioSegment
+    import librosa
     try:
         segment = AudioSegment.from_file(path)
         samples = np.array(segment.get_array_of_samples())
@@ -296,6 +298,7 @@ def list_staged_files(staged_paths_text):
 
 
 def restore_one_audio(input_file, steps, cutoff_hz, batch_size, progress, file_index, total_files):
+    from pydub import AudioSegment
     try:
         audio = AudioSegment.from_file(input_file)
         audio = ensure_a2sb_input_format(audio)
