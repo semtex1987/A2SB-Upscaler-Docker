@@ -23,10 +23,11 @@ sys.modules['pydub'] = mock_pydub
 import app
 
 
+
 class TestButterLowpassFilterMock(unittest.TestCase):
     def test_butter_lowpass_filter_calls_sosfilt_with_correct_axis(self):
-        app.butter = MagicMock(return_value='dummy_sos')
-        app.sosfilt = MagicMock(return_value='filtered_data')
+        sys.modules['scipy.signal'].butter = MagicMock(return_value='dummy_sos')
+        sys.modules['scipy.signal'].sosfilt = MagicMock(return_value='filtered_data')
 
         fake_data = MagicMock()
         fake_data.dtype = 'float32'
@@ -36,12 +37,12 @@ class TestButterLowpassFilterMock(unittest.TestCase):
         result = app.butter_lowpass_filter(fake_data, 4000, 44100)
 
         self.assertEqual(result, 'filtered_data')
-        app.sosfilt.assert_called_once()
-        _, kwargs = app.sosfilt.call_args
+        sys.modules['scipy.signal'].sosfilt.assert_called_once()
+        _, kwargs = sys.modules['scipy.signal'].sosfilt.call_args
         self.assertEqual(kwargs.get('axis'), 0)
 
     def test_integer_path_clips_before_cast(self):
-        app.butter = MagicMock(return_value='dummy_sos')
+        sys.modules['scipy.signal'].butter = MagicMock(return_value='dummy_sos')
 
         fake_data = MagicMock()
         fake_data.dtype = 'int16'
@@ -59,7 +60,7 @@ class TestButterLowpassFilterMock(unittest.TestCase):
         data_float.__truediv__.return_value = normalized
 
         filtered = MagicMock()
-        app.sosfilt = MagicMock(return_value=filtered)
+        sys.modules['scipy.signal'].sosfilt = MagicMock(return_value=filtered)
 
         clipped = MagicMock()
         app.np.clip = MagicMock(return_value=clipped)
