@@ -19,6 +19,7 @@ sys.modules['matplotlib.pyplot'] = mock_matplotlib.pyplot
 sys.modules['librosa'] = mock_librosa
 sys.modules['librosa.display'] = mock_librosa.display
 sys.modules['pydub'] = mock_pydub
+sys.modules['soundfile'] = MagicMock()
 
 import app
 
