@@ -13,6 +13,7 @@ import librosa.display
 from scipy.signal import butter, sosfilt
 from pydub import AudioSegment
 import functools
+import soundfile as sf
 
 # Directories
 def _ensure_runtime_dir(preferred_path, fallback_name):
@@ -187,19 +188,23 @@ def run_a2sb_inference(input_path, output_path, steps, cutoff_hz, batch_size):
 
 def is_likely_corrupted_audio(path):
     try:
-        segment = AudioSegment.from_file(path)
-        samples = np.array(segment.get_array_of_samples())
+        # A2SB outputs are always .wav files. soundfile reads headers in O(1) time
+        # and parses bytes directly to numpy C-arrays, avoiding pydub's extremely slow
+        # parsing of wav files into Python array.array objects.
+        samples, sr = sf.read(path, dtype='int16')
     except Exception:
         return True
 
     if samples.size == 0 or not np.isfinite(samples).all():
         return True
 
-    if np.issubdtype(samples.dtype, np.integer):
-        info = np.iinfo(samples.dtype)
-        full_scale = float(info.max)
-    else:
-        full_scale = 1.0
+    if samples.ndim > 1:
+        # A2SB outputs are stereo but we can flatten them for these simple checks
+        # avoiding the mean operation preserves the true peak across channels
+        samples = samples.flatten()
+
+    info = np.iinfo(samples.dtype)
+    full_scale = float(info.max)
 
     abs_samples = np.abs(samples.astype(np.float64))
     peak = float(np.max(abs_samples))

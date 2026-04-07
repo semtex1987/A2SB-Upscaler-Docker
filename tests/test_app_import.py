@@ -14,6 +14,7 @@ mock_modules = [
     "scipy.signal",
     "pydub",
     "numpy",
+    "soundfile",
 ]
 
 for module in mock_modules:

@@ -21,6 +21,7 @@ sys.modules['pydub'] = mock_pydub
 sys.modules['numpy'] = mock_numpy
 sys.modules['scipy'] = mock_scipy
 sys.modules['scipy.signal'] = mock_scipy.signal
+sys.modules['soundfile'] = MagicMock()
 
 import app
 
