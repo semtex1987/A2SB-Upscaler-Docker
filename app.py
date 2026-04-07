@@ -504,14 +504,19 @@ if __name__ == "__main__":
                     label="Staged File Paths (Optional)",
                     placeholder="/app/inputs/*.wav\n/app/inputs/song_a.flac",
                     lines=2,
+                    info="Use glob patterns like /app/inputs/*.wav to process files already on the server.",
                 )
                 list_staged_button = gr.Button("List Staged Files")
                 staged_preview = gr.Markdown("No staged files listed yet.")
-                steps = gr.Slider(minimum=10, maximum=200, value=50, step=10, label="Steps (Quality)")
+                steps = gr.Slider(
+                    minimum=10, maximum=200, value=50, step=10, label="Steps (Quality)",
+                    info="More steps = higher quality but slower processing. 50-100 is recommended.",
+                )
                 cutoff_choice = gr.Dropdown(
                     choices=["4kHz", "14kHz", "16kHz"],
                     value="14kHz",
                     label="Input Lowpass Filter (Cutoff)",
+                    info="Set to the approximate highest frequency in your original audio (e.g., 4kHz for phone calls).",
                 )
                 batch_size = gr.Slider(
                     minimum=UI_BATCH_MIN,
@@ -519,6 +524,7 @@ if __name__ == "__main__":
                     value=UI_BATCH_DEFAULT,
                     step=1,
                     label="Inference Batch Size",
+                    info="Higher = faster but uses more VRAM. Start with 16-32 for H100/H200.",
                 )
                 run_button = gr.Button("Process Batch", variant="primary")
                 summary = gr.Markdown("No files processed yet.")
