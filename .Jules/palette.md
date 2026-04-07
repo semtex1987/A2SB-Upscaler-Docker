@@ -1,0 +1,3 @@
+## 2025-01-20 - [Gradio Form Component Instructions]
+**Learning:** Avoid wall-of-text explanations at the top of the app. Use the `info` parameter for supported components (e.g., Textbox, Slider) to improve discoverability and keep context local. For components like `gr.File` that lack `info` support, use localized `gr.Markdown` blocks directly adjacent to the component instead of cluttering the main layout or the component's `label`.
+**Action:** Always move component-specific instructions from global `gr.Markdown` blocks into `info` properties or local `gr.Markdown` blocks next to the relevant components.
