@@ -1,0 +1,3 @@
+## 2024-05-19 - Reduce Cognitive Load in Gradio UI
+**Learning:** Moving top-level wall-of-text explanations into contextual `info` properties on Gradio inputs reduces cognitive load and improves discoverability without cluttering the main layout.
+**Action:** When creating or improving Gradio interfaces, prefer using the `info` parameter on components (like `gr.File`, `gr.Textbox`, `gr.Slider`) instead of large `gr.Markdown` blocks at the top of the page.
