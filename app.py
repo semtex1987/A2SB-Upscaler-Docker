@@ -4,15 +4,10 @@ import os
 import tempfile
 import glob
 import numpy as np
-import matplotlib
-# Use 'Agg' backend to prevent errors in Docker (no display)
-matplotlib.use('Agg') 
-import matplotlib.pyplot as plt
-import librosa
-import librosa.display
-from scipy.signal import butter, sosfilt
-from pydub import AudioSegment
 import functools
+
+# ⚡ Bolt: Kept heavy dependencies like librosa, scipy, matplotlib, and pydub
+# localized within functions (lazy-loading) to significantly improve script startup time.
 
 # Directories
 def _ensure_runtime_dir(preferred_path, fallback_name):
@@ -50,9 +45,11 @@ UI_BATCH_DEFAULT = min(max(UI_BATCH_DEFAULT, UI_BATCH_MIN), UI_BATCH_MAX)
 # `scipy.signal.butter` is slow, avoiding redundant calculations speeds up filtering, especially for stereo or batch processing.
 @functools.lru_cache(maxsize=128)
 def _get_butter_sos(order, normal_cutoff):
+    from scipy.signal import butter
     return butter(order, normal_cutoff, btype='low', analog=False, output='sos')
 
 def butter_lowpass_filter(data, cutoff, fs, order=10):
+    from scipy.signal import sosfilt
     data_arr = np.asarray(data)
     nyq = 0.5 * fs
     normal_cutoff = cutoff / nyq
@@ -94,6 +91,12 @@ def generate_comparison_plot(original_path, restored_path):
     """
     Generates a side-by-side Mel-spectrogram comparison.
     """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import librosa
+    import librosa.display
+
     # ⚡ Bolt: Load audio files with sr=None to avoid slow default resampling to 22050Hz
     # This significantly speeds up spectrogram generation after inference
     y_orig, sr_orig = librosa.load(original_path, sr=None)
@@ -186,6 +189,7 @@ def run_a2sb_inference(input_path, output_path, steps, cutoff_hz, batch_size):
 
 
 def is_likely_corrupted_audio(path):
+    from pydub import AudioSegment
     try:
         segment = AudioSegment.from_file(path)
         samples = np.array(segment.get_array_of_samples())
@@ -218,6 +222,7 @@ def is_likely_corrupted_audio(path):
     # hallmark of failed diffusion outputs (e.g. when the entire spectrum was
     # masked and the model hallucinated from noise).
     try:
+        import librosa
         y = samples.astype(np.float32) / max(peak, 1.0)
         flatness = librosa.feature.spectral_flatness(y=y)
         mean_flatness = float(np.mean(flatness))
@@ -296,6 +301,7 @@ def list_staged_files(staged_paths_text):
 
 
 def restore_one_audio(input_file, steps, cutoff_hz, batch_size, progress, file_index, total_files):
+    from pydub import AudioSegment
     try:
         audio = AudioSegment.from_file(input_file)
         audio = ensure_a2sb_input_format(audio)
