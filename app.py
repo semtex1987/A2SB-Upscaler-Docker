@@ -92,7 +92,12 @@ def apply_lowpass_to_segment(segment, cutoff_freq_hz):
 
 def generate_comparison_plot(original_path, restored_path):
     """
-    Generates a side-by-side Mel-spectrogram comparison.
+    Create and save a two-panel Mel-scale spectrogram PNG comparing the original (filtered) input and the restored output.
+    
+    The restored audio's sample rate is used as the frequency reference (fmax) for both panels so the visual frequency axes align. The image is written next to the restored file by replacing the ".wav" suffix with "_spectrogram.png".
+    
+    Returns:
+        output_img_path (str): Filesystem path to the saved spectrogram PNG.
     """
     # ⚡ Bolt: Load audio files with sr=None to avoid slow default resampling to 22050Hz
     # This significantly speeds up spectrogram generation after inference
