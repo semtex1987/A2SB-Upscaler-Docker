@@ -1,0 +1,3 @@
+## 2024-05-24 - Gradio Layout Readability and Component Instructions
+**Learning:** Wall-of-text explanations at the top of a Gradio interface (using `gr.Markdown`) are often ignored and cause visual clutter. Users prefer localized help text that is contextual to the component they are interacting with.
+**Action:** When designing or refactoring Gradio interfaces, use the native `info` parameter for components that support it (e.g., `Textbox`, `Slider`) to attach explanations directly to the input. For components lacking `info` support (e.g., `gr.File`), place a localized `gr.Markdown` block immediately above them instead of clustering all explanations at the page top.
