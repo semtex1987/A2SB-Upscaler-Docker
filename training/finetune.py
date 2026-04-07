@@ -35,6 +35,15 @@ MAIN_PY = APP_ROOT / "main.py"
 
 def get_duration(path: str) -> float | None:
     try:
+        # ⚡ Bolt: Use soundfile for O(1) duration lookup instead of librosa's O(N) full file decode.
+        # This reduces manifest building time for large datasets from minutes/hours to seconds.
+        import soundfile as sf
+        return float(sf.info(path).duration)
+    except Exception:
+        pass
+
+    try:
+        # Fallback to librosa if soundfile fails (e.g., for mp3 if sf backend lacks support)
         import librosa
         return float(librosa.get_duration(path=path))
     except Exception:
