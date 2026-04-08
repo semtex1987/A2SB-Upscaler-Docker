@@ -8,3 +8,7 @@
 ## 2026-04-06 - Precalculate ML model refs before loops
 **Learning:** Hoisting model retrieval logic (e.g., `get_vf_model`) outside of tight diffusion sampling loops by pre-calculating model references for all timesteps significantly reduces Python overhead per iteration.
 **Action:** When implementing iterative sampling algorithms, precompute state variables such as model partitions to avoid redundant O(N) lookup overhead on every step.
+
+## 2024-05-18 - Use soundfile for direct NumPy array loading of WAV files
+**Learning:** When working with files guaranteed to be `.wav` format (such as A2SB inference outputs), using `soundfile.read` loads the binary data directly into a C-contiguous NumPy array. Using `pydub.AudioSegment` creates extreme memory and CPU overhead by parsing wav files byte-by-byte into intermediate Python arrays.
+**Action:** Always prefer `soundfile.read` over `pydub.AudioSegment` when loading WAV files purely for numeric array processing or validation (e.g. calculating RMS, finding peaks).
