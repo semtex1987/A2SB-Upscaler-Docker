@@ -1,0 +1,3 @@
+## 2024-05-24 - Avoid Wall-of-Text Explanations in Gradio Apps
+**Learning:** Avoid wall-of-text explanations at the top of the app. Users often ignore them and they push actual interactive components down the page. Use the `info` parameter for supported components (e.g., Textbox, Slider) to improve discoverability. For components like `gr.File` that lack `info` support, use localized `gr.Markdown` blocks directly adjacent to the component instead of cluttering the main layout or the component's `label`.
+**Action:** When designing or refactoring Gradio apps, migrate general instructions into localized component-level hints using the `info` parameter. If `info` is unsupported, place a small, concise `gr.Markdown` directly next to the component.
