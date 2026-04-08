@@ -12,6 +12,7 @@ import librosa
 import librosa.display
 from scipy.signal import butter, sosfilt
 from pydub import AudioSegment
+import soundfile as sf
 import functools
 
 # Directories
@@ -187,8 +188,11 @@ def run_a2sb_inference(input_path, output_path, steps, cutoff_hz, batch_size):
 
 def is_likely_corrupted_audio(path):
     try:
-        segment = AudioSegment.from_file(path)
-        samples = np.array(segment.get_array_of_samples())
+        # ⚡ Bolt: Use soundfile.read instead of pydub to read wav files.
+        # This avoids byte-by-byte parsing overhead and creates the NumPy array directly in C,
+        # speeding up I/O and reducing memory overhead dramatically for A2SB output validation.
+        samples, _ = sf.read(path, dtype='int16')
+        samples = samples.flatten()
     except Exception:
         return True
 
