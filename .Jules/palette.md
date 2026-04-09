@@ -1,0 +1,3 @@
+## 2026-04-09 - Gradio UI Component Discoverability
+**Learning:** Wall-of-text instructions at the top of a Gradio interface are often ignored by users and clutter the layout. Gradio components (like `gr.Slider`, `gr.Textbox`) support an `info` parameter that displays helper text immediately below the label.
+**Action:** Always prefer using the `info` parameter on individual Gradio components for localized context rather than large, top-level markdown blocks. For components that lack `info` support (like `gr.File`), use a localized `gr.Markdown` block placed immediately before/adjacent to the component.
