@@ -10,6 +10,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import librosa
 import librosa.display
+import soundfile as sf
 from scipy.signal import butter, sosfilt
 from pydub import AudioSegment
 import functools
@@ -187,8 +188,10 @@ def run_a2sb_inference(input_path, output_path, steps, cutoff_hz, batch_size):
 
 def is_likely_corrupted_audio(path):
     try:
-        segment = AudioSegment.from_file(path)
-        samples = np.array(segment.get_array_of_samples())
+        # ⚡ Bolt: Use soundfile.read directly to a C-contiguous array instead of AudioSegment
+        # This prevents extreme pydub overhead when reading guaranteed .wav outputs from A2SB.
+        samples, _ = sf.read(path, dtype='int16')
+        samples = samples.flatten()
     except Exception:
         return True
 
