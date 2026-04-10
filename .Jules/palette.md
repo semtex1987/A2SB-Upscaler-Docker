@@ -1,0 +1,3 @@
+## 2024-05-24 - Inline Component Instructions
+**Learning:** Avoid wall-of-text explanations at the top of the interface. Users often skip reading large text blocks. Gradio components like Textbox and Slider support an `info` parameter to place help text right where the user is looking. For components that do not support it (like File), placing a localized `gr.Markdown` block directly above is better than grouping all instructions at the top.
+**Action:** Always prefer the `info` parameter for supported components to improve discoverability. Use localized Markdown adjacent to components lacking `info` support.
