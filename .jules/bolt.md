@@ -8,3 +8,6 @@
 ## 2026-04-06 - Precalculate ML model refs before loops
 **Learning:** Hoisting model retrieval logic (e.g., `get_vf_model`) outside of tight diffusion sampling loops by pre-calculating model references for all timesteps significantly reduces Python overhead per iteration.
 **Action:** When implementing iterative sampling algorithms, precompute state variables such as model partitions to avoid redundant O(N) lookup overhead on every step.
+## 2024-04-10 - Optimizing Spectral Flatness calculation
+**Learning:** `librosa.feature.spectral_flatness()` is extremely slow due to its default high resolution calculation (hop_length=512, n_fft=2048). When used merely to detect model hallucination by roughly estimating noise, this high resolution is unnecessary and creates a severe bottleneck.
+**Action:** When a high-level approximation of features is sufficient (like checking if an entire audio file is just noise), dramatically increase `hop_length` (e.g., `hop_length=2048`) to compute fewer frames and drastically speed up the computation.

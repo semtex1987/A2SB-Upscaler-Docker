@@ -186,9 +186,13 @@ def run_a2sb_inference(input_path, output_path, steps, cutoff_hz, batch_size):
 
 
 def is_likely_corrupted_audio(path):
+    import soundfile as sf
     try:
-        segment = AudioSegment.from_file(path)
-        samples = np.array(segment.get_array_of_samples())
+        # ⚡ Bolt: Use soundfile instead of pydub since we know A2SB outputs are .wav.
+        # This bypasses the heavy overhead of pydub's AudioSegment.get_array_of_samples().
+        samples, _ = sf.read(path, dtype='int16')
+        if samples.ndim > 1:
+            samples = samples.flatten()
     except Exception:
         return True
 
@@ -219,7 +223,9 @@ def is_likely_corrupted_audio(path):
     # masked and the model hallucinated from noise).
     try:
         y = samples.astype(np.float32) / max(peak, 1.0)
-        flatness = librosa.feature.spectral_flatness(y=y)
+        # ⚡ Bolt: Increase hop_length to significantly speed up calculation
+        # We only need a rough estimate of noise, so fewer frames via a larger hop_length is fine.
+        flatness = librosa.feature.spectral_flatness(y=y, hop_length=2048)
         mean_flatness = float(np.mean(flatness))
         if mean_flatness > 0.6:
             return True
