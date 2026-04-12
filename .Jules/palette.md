@@ -1,0 +1,3 @@
+## 2024-05-24 - Contextual Guidance in Gradio Forms
+**Learning:** Using generic wall-of-text instructions at the top of a Gradio interface leads to poorer discoverability because users often scan past them directly to the input components. Some components like `gr.File` do not natively support the `info` parameter.
+**Action:** When designing Gradio forms, leverage the native `info` parameter on supporting components (like `gr.Slider`, `gr.Textbox`, `gr.Dropdown`) to provide localized context precisely where decisions are made. For components that lack `info` support, position a brief `gr.Markdown` block directly adjacent to them rather than grouping all instructions at the top.
