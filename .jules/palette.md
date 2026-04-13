@@ -1,0 +1,3 @@
+## 2024-04-13 - Localized Component Instructions in Gradio
+**Learning:** Wall-of-text explanations at the top of a Gradio interface clutter the UI and suffer from poor discoverability. Users tend to ignore global instructions and struggle to associate them with the relevant controls lower down the page.
+**Action:** Use the `info` parameter for supported Gradio components (like `gr.Textbox`, `gr.Slider`, and `gr.Dropdown`) to attach helpful context directly where the user interacts. For components that lack `info` support (like `gr.File`), place localized `gr.Markdown` blocks immediately adjacent to the component.
