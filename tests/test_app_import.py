@@ -13,11 +13,13 @@ mock_modules = [
     "scipy",
     "scipy.signal",
     "pydub",
+    "soundfile",
     "numpy",
 ]
 
 for module in mock_modules:
     sys.modules[module] = MagicMock()
+
 
 def test_app_importable():
     """
@@ -25,6 +27,7 @@ def test_app_importable():
     """
     # Reset mock to clear any previous calls
     import gradio
+
     gradio.Interface.return_value.launch.reset_mock()
 
     try:
@@ -35,18 +38,24 @@ def test_app_importable():
 
         # Verify that launch was NOT called
         import gradio
-        assert not gradio.Interface.return_value.launch.called, "gr.Interface().launch() was called on import!"
+
+        assert (
+            not gradio.Interface.return_value.launch.called
+        ), "gr.Interface().launch() was called on import!"
 
     except Exception as e:
         pytest.fail(f"Importing app failed with error: {e}")
+
 
 def test_app_functions_accessible():
     """
     Test that functions in app.py are accessible after import.
     """
     import app
+
     assert callable(app.butter_lowpass_filter)
     assert callable(app.restore_audio)
+
 
 def test_iface_not_global_without_main():
     """
@@ -54,4 +63,5 @@ def test_iface_not_global_without_main():
     it should not be available as a global variable when app is imported.
     """
     import app
-    assert not hasattr(app, 'iface')
+
+    assert not hasattr(app, "iface")

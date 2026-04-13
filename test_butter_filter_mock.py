@@ -10,41 +10,42 @@ mock_matplotlib = MagicMock()
 mock_librosa = MagicMock()
 mock_pydub = MagicMock()
 
-sys.modules['numpy'] = mock_numpy
-sys.modules['scipy'] = mock_scipy
-sys.modules['scipy.signal'] = mock_scipy.signal
-sys.modules['gradio'] = mock_gradio
-sys.modules['matplotlib'] = mock_matplotlib
-sys.modules['matplotlib.pyplot'] = mock_matplotlib.pyplot
-sys.modules['librosa'] = mock_librosa
-sys.modules['librosa.display'] = mock_librosa.display
-sys.modules['pydub'] = mock_pydub
+sys.modules["numpy"] = mock_numpy
+sys.modules["scipy"] = mock_scipy
+sys.modules["scipy.signal"] = mock_scipy.signal
+sys.modules["gradio"] = mock_gradio
+sys.modules["matplotlib"] = mock_matplotlib
+sys.modules["matplotlib.pyplot"] = mock_matplotlib.pyplot
+sys.modules["librosa"] = mock_librosa
+sys.modules["librosa.display"] = mock_librosa.display
+sys.modules["pydub"] = mock_pydub
+sys.modules["soundfile"] = MagicMock()
 
 import app
 
 
 class TestButterLowpassFilterMock(unittest.TestCase):
     def test_butter_lowpass_filter_calls_sosfilt_with_correct_axis(self):
-        app.butter = MagicMock(return_value='dummy_sos')
-        app.sosfilt = MagicMock(return_value='filtered_data')
+        app.butter = MagicMock(return_value="dummy_sos")
+        app.sosfilt = MagicMock(return_value="filtered_data")
 
         fake_data = MagicMock()
-        fake_data.dtype = 'float32'
+        fake_data.dtype = "float32"
         app.np.asarray = MagicMock(return_value=fake_data)
         app.np.issubdtype = MagicMock(return_value=False)
 
         result = app.butter_lowpass_filter(fake_data, 4000, 44100)
 
-        self.assertEqual(result, 'filtered_data')
+        self.assertEqual(result, "filtered_data")
         app.sosfilt.assert_called_once()
         _, kwargs = app.sosfilt.call_args
-        self.assertEqual(kwargs.get('axis'), 0)
+        self.assertEqual(kwargs.get("axis"), 0)
 
     def test_integer_path_clips_before_cast(self):
-        app.butter = MagicMock(return_value='dummy_sos')
+        app.butter = MagicMock(return_value="dummy_sos")
 
         fake_data = MagicMock()
-        fake_data.dtype = 'int16'
+        fake_data.dtype = "int16"
         app.np.asarray = MagicMock(return_value=fake_data)
         app.np.issubdtype = MagicMock(return_value=True)
 
@@ -76,5 +77,5 @@ class TestButterLowpassFilterMock(unittest.TestCase):
         app.np.clip.assert_called_once()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
