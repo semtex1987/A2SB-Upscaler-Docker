@@ -217,9 +217,11 @@ def is_likely_corrupted_audio(path):
     # Spectral flatness near 1.0 indicates noise-like content, which is a
     # hallmark of failed diffusion outputs (e.g. when the entire spectrum was
     # masked and the model hallucinated from noise).
+    # ⚡ Bolt: Increase n_fft and hop_length to drastically speed up macro-level
+    # metric approximation, avoiding the extremely slow default (hop=512).
     try:
         y = samples.astype(np.float32) / max(peak, 1.0)
-        flatness = librosa.feature.spectral_flatness(y=y)
+        flatness = librosa.feature.spectral_flatness(y=y, n_fft=2048, hop_length=2048)
         mean_flatness = float(np.mean(flatness))
         if mean_flatness > 0.6:
             return True
