@@ -219,7 +219,9 @@ def is_likely_corrupted_audio(path):
     # masked and the model hallucinated from noise).
     try:
         y = samples.astype(np.float32) / max(peak, 1.0)
-        flatness = librosa.feature.spectral_flatness(y=y)
+        # Using explicit, larger n_fft and hop_length significantly speeds up the
+        # macro-level spectral flatness check without losing accuracy for this task.
+        flatness = librosa.feature.spectral_flatness(y=y, n_fft=2048, hop_length=2048)
         mean_flatness = float(np.mean(flatness))
         if mean_flatness > 0.6:
             return True
