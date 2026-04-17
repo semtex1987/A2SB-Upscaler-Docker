@@ -12,6 +12,7 @@ import librosa
 import librosa.display
 from scipy.signal import butter, sosfilt
 from pydub import AudioSegment
+import soundfile as sf
 import functools
 
 # Directories
@@ -187,8 +188,13 @@ def run_a2sb_inference(input_path, output_path, steps, cutoff_hz, batch_size):
 
 def is_likely_corrupted_audio(path):
     try:
-        segment = AudioSegment.from_file(path)
-        samples = np.array(segment.get_array_of_samples())
+        # ⚡ Bolt: Use soundfile instead of pydub to load WAV files directly into a numpy array.
+        # This avoids the significant overhead of pydub and ffmpeg for audio guaranteed to be WAV.
+        samples, _ = sf.read(path, dtype='int16')
+
+        # If stereo, librosa expects shape (channels, frames). sf returns (frames, channels).
+        if samples.ndim > 1:
+            samples = samples.T
     except Exception:
         return True
 
@@ -219,7 +225,10 @@ def is_likely_corrupted_audio(path):
     # masked and the model hallucinated from noise).
     try:
         y = samples.astype(np.float32) / max(peak, 1.0)
-        flatness = librosa.feature.spectral_flatness(y=y)
+        # ⚡ Bolt: Increase hop_length and n_fft to drastically speed up
+        # spectral flatness computation. For a macro-level noise check,
+        # higher resolution is not needed.
+        flatness = librosa.feature.spectral_flatness(y=y, n_fft=2048, hop_length=2048)
         mean_flatness = float(np.mean(flatness))
         if mean_flatness > 0.6:
             return True
