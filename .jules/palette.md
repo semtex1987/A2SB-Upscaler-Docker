@@ -1,0 +1,3 @@
+## 2024-04-18 - Improve Gradio Component Discoverability
+**Learning:** Avoid wall-of-text explanations at the top of Gradio applications. For supported components like `gr.Textbox` and `gr.Slider`, use the `info` parameter to improve discoverability with contextual help text. For components like `gr.File` that lack `info` support, use localized `gr.Markdown` blocks directly adjacent to the component instead of cluttering the main layout or the component's `label`.
+**Action:** Always prefer the `info` parameter for providing help text on supported Gradio components, and fallback to localized `gr.Markdown` above the component only when `info` is unsupported.

@@ -478,22 +478,13 @@ if __name__ == "__main__":
     custom_css = "body { background-color: #121212; color: white; }"
     with gr.Blocks() as demo:
         gr.Markdown("# NVIDIA A2SB Stereo Restorer")
-        gr.Markdown(
-            "Upload one or many audio files to restore them sequentially. "
-            "Lower batch size reduces VRAM usage at the cost of longer inference time. "
-            "For H100/H200, 16-32 is a good starting range. For bandwidth extension, "
-            "50-100 steps is usually the practical range."
-        )
-        gr.Markdown(
-            "Optional: stage files directly on the pod (for example with runpodctl) and "
-            "enter paths like /app/inputs/*.wav below to bypass browser upload."
-        )
 
         restored_state = gr.State([])
         plot_state = gr.State([])
 
         with gr.Row():
             with gr.Column(scale=1):
+                gr.Markdown("Upload one or many audio files to restore them sequentially.")
                 input_files = gr.File(
                     file_count="multiple",
                     type="filepath",
@@ -504,10 +495,15 @@ if __name__ == "__main__":
                     label="Staged File Paths (Optional)",
                     placeholder="/app/inputs/*.wav\n/app/inputs/song_a.flac",
                     lines=2,
+                    info="Stage files directly on the pod (e.g. with runpodctl) and enter paths to bypass browser upload.",
                 )
                 list_staged_button = gr.Button("List Staged Files")
                 staged_preview = gr.Markdown("No staged files listed yet.")
-                steps = gr.Slider(minimum=10, maximum=200, value=50, step=10, label="Steps (Quality)")
+                steps = gr.Slider(
+                    minimum=10, maximum=200, value=50, step=10,
+                    label="Steps (Quality)",
+                    info="For bandwidth extension, 50-100 steps is usually the practical range."
+                )
                 cutoff_choice = gr.Dropdown(
                     choices=["4kHz", "14kHz", "16kHz"],
                     value="14kHz",
@@ -519,6 +515,7 @@ if __name__ == "__main__":
                     value=UI_BATCH_DEFAULT,
                     step=1,
                     label="Inference Batch Size",
+                    info="Lower batch size reduces VRAM usage at the cost of longer inference time. For H100/H200, 16-32 is a good starting range.",
                 )
                 run_button = gr.Button("Process Batch", variant="primary")
                 summary = gr.Markdown("No files processed yet.")
