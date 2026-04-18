@@ -260,9 +260,12 @@ class STFTBridgeModel(LightningModule):
         pred_x0 = None
         all_pred_x0s = []
 
+        # ⚡ Bolt: Precalculate temporal embeddings to avoid redundant calculations per loop iteration
+        all_t_embs = [self.t_to_emb(t_steps[:, t_idx]).repeat(x_1.shape[0], 1) for t_idx in range(n_steps)]
+
         for t_idx in range(n_steps):
 
-            t_emb = self.t_to_emb(t_steps[:,t_idx]).repeat(x_1.shape[0], 1)
+            t_emb = all_t_embs[t_idx]
             t = t_steps[:, t_idx] 
             t_prev = t_steps[:, t_idx+1] 
             vf_output = self.vf_model(x_t, t_emb)
@@ -296,9 +299,12 @@ class STFTBridgeModel(LightningModule):
         pred_x0 = None
         all_pred_x0s = []
 
+        # ⚡ Bolt: Precalculate temporal embeddings to avoid redundant calculations per loop iteration
+        all_t_embs = [self.t_to_emb(t_steps[:, t_idx]).repeat(x_1.shape[0], 1) for t_idx in range(n_steps)]
+
         for t_idx in range(n_steps):
 
-            t_emb = self.t_to_emb(t_steps[:,t_idx]).repeat(x_1.shape[0], 1)
+            t_emb = all_t_embs[t_idx]
             t = t_steps[:, t_idx]
             t_prev = t_steps[:, t_idx+1]
 
@@ -334,9 +340,12 @@ class STFTBridgeModel(LightningModule):
         pred_x0 = None
         all_pred_x0s = []
 
+        # ⚡ Bolt: Precalculate temporal embeddings to avoid redundant calculations per loop iteration
+        all_t_embs = [self.t_to_emb(t_steps[:, t_idx]).repeat(x_1.shape[0], 1) for t_idx in range(n_steps)]
+
         for t_idx in range(n_steps):
 
-            t_emb = self.t_to_emb(t_steps[:,t_idx]).repeat(x_1.shape[0], 1)
+            t_emb = all_t_embs[t_idx]
             t = t_steps[:, t_idx] 
             t_prev = t_steps[:, t_idx+1] 
             vf_output = self.vf_model(x_t, t_emb)
