@@ -5,14 +5,16 @@ import tempfile
 import glob
 import numpy as np
 import matplotlib
+
 # Use 'Agg' backend to prevent errors in Docker (no display)
-matplotlib.use('Agg') 
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import librosa
 import librosa.display
 from scipy.signal import butter, sosfilt
 from pydub import AudioSegment
 import functools
+
 
 # Directories
 def _ensure_runtime_dir(preferred_path, fallback_name):
@@ -25,8 +27,12 @@ def _ensure_runtime_dir(preferred_path, fallback_name):
         return fallback_path
 
 
-INPUT_DIR = _ensure_runtime_dir(os.environ.get("A2SB_INPUT_DIR", "/app/inputs"), "a2sb-inputs")
-OUTPUT_DIR = _ensure_runtime_dir(os.environ.get("A2SB_OUTPUT_DIR", "/app/outputs"), "a2sb-outputs")
+INPUT_DIR = _ensure_runtime_dir(
+    os.environ.get("A2SB_INPUT_DIR", "/app/inputs"), "a2sb-inputs"
+)
+OUTPUT_DIR = _ensure_runtime_dir(
+    os.environ.get("A2SB_OUTPUT_DIR", "/app/outputs"), "a2sb-outputs"
+)
 
 
 def _read_int_env(name, default):
@@ -46,11 +52,13 @@ UI_BATCH_DEFAULT = min(max(UI_BATCH_DEFAULT, UI_BATCH_MIN), UI_BATCH_MAX)
 
 # --- Signal Processing Functions ---
 
+
 # ⚡ Bolt: Cache filter generation since cutoff and fs are usually static.
 # `scipy.signal.butter` is slow, avoiding redundant calculations speeds up filtering, especially for stereo or batch processing.
 @functools.lru_cache(maxsize=128)
 def _get_butter_sos(order, normal_cutoff):
-    return butter(order, normal_cutoff, btype='low', analog=False, output='sos')
+    return butter(order, normal_cutoff, btype="low", analog=False, output="sos")
+
 
 def butter_lowpass_filter(data, cutoff, fs, order=10):
     data_arr = np.asarray(data)
@@ -80,6 +88,7 @@ def butter_lowpass_filter(data, cutoff, fs, order=10):
     filtered = np.clip(filtered, -1.0, 1.0 - (1.0 / peak))
     return np.round(filtered * peak).astype(data_arr.dtype)
 
+
 def apply_lowpass_to_segment(segment, cutoff_freq_hz):
     channel_data = np.array(segment.get_array_of_samples())
     if segment.channels == 2:
@@ -88,7 +97,9 @@ def apply_lowpass_to_segment(segment, cutoff_freq_hz):
     filtered_data = butter_lowpass_filter(channel_data, cutoff_freq_hz, fs)
     return segment._spawn(filtered_data.tobytes())
 
+
 # --- Plotting Function (FIXED LAYOUT) ---
+
 
 def generate_comparison_plot(original_path, restored_path):
     """
@@ -110,31 +121,56 @@ def generate_comparison_plot(original_path, restored_path):
     S_db_rest = librosa.power_to_db(S_rest, ref=np.max)
 
     # FIX: Use constrained_layout=True to handle colorbars automatically
-    fig, ax = plt.subplots(nrows=2, ncols=1, sharex=True, sharey=True, figsize=(12, 8), constrained_layout=True)
-    
+    fig, ax = plt.subplots(
+        nrows=2,
+        ncols=1,
+        sharex=True,
+        sharey=True,
+        figsize=(12, 8),
+        constrained_layout=True,
+    )
+
     # Plot Original
-    img1 = librosa.display.specshow(S_db_orig, x_axis='time', y_axis='mel', sr=sr_orig, fmax=fmax, ax=ax[0], cmap='inferno')
-    ax[0].set_title('Original (Filtered Input)')
-    ax[0].set(xlabel='') # Hide x label for top plot
+    img1 = librosa.display.specshow(
+        S_db_orig,
+        x_axis="time",
+        y_axis="mel",
+        sr=sr_orig,
+        fmax=fmax,
+        ax=ax[0],
+        cmap="inferno",
+    )
+    ax[0].set_title("Original (Filtered Input)")
+    ax[0].set(xlabel="")  # Hide x label for top plot
 
     # Plot Restored
-    img2 = librosa.display.specshow(S_db_rest, x_axis='time', y_axis='mel', sr=sr_rest, fmax=fmax, ax=ax[1], cmap='inferno')
-    ax[1].set_title('Restored Output (A2SB)')
+    img2 = librosa.display.specshow(
+        S_db_rest,
+        x_axis="time",
+        y_axis="mel",
+        sr=sr_rest,
+        fmax=fmax,
+        ax=ax[1],
+        cmap="inferno",
+    )
+    ax[1].set_title("Restored Output (A2SB)")
 
     # Add Colorbar
     # Attaching it to 'ax' makes it span both plots nicely on the right
-    fig.colorbar(img2, ax=ax, format='%+2.0f dB', label='Intensity (dB)')
-    
+    fig.colorbar(img2, ax=ax, format="%+2.0f dB", label="Intensity (dB)")
+
     # Save Plot
     output_img_path = restored_path.replace(".wav", "_spectrogram.png")
-    
+
     # FIX: Removed plt.tight_layout() as it conflicts with constrained_layout
     plt.savefig(output_img_path)
     plt.close()
-    
+
     return output_img_path
 
+
 # --- Inference Functions ---
+
 
 def run_a2sb_inference(input_path, output_path, steps, cutoff_hz, batch_size):
     script_name = "A2SB_upsample_api.py"
@@ -142,12 +178,18 @@ def run_a2sb_inference(input_path, output_path, steps, cutoff_hz, batch_size):
     # UpsampleMask computes FFT bin indices via (n_fft * freq / sampling_rate),
     # so the cutoff MUST be in Hz to produce the correct bin boundary.
     command = [
-        "python3", script_name,
-        "-f", input_path,
-        "-o", output_path,
-        "-n", str(int(steps)),
-        "-c", str(int(cutoff_hz)),
-        "-b", str(int(batch_size)),
+        "python3",
+        script_name,
+        "-f",
+        input_path,
+        "-o",
+        output_path,
+        "-n",
+        str(int(steps)),
+        "-c",
+        str(int(cutoff_hz)),
+        "-b",
+        str(int(batch_size)),
     ]
 
     env = os.environ.copy()
@@ -219,7 +261,10 @@ def is_likely_corrupted_audio(path):
     # masked and the model hallucinated from noise).
     try:
         y = samples.astype(np.float32) / max(peak, 1.0)
-        flatness = librosa.feature.spectral_flatness(y=y)
+        # ⚡ Bolt: Fast macro-level spectral flatness approximation
+        # Dramatically reduces computation time by increasing hop_length/n_fft
+        # since we only need a rough estimate to detect pure noise
+        flatness = librosa.feature.spectral_flatness(y=y, n_fft=2048, hop_length=2048)
         mean_flatness = float(np.mean(flatness))
         if mean_flatness > 0.6:
             return True
@@ -227,6 +272,7 @@ def is_likely_corrupted_audio(path):
         pass
 
     return False
+
 
 def ensure_a2sb_input_format(segment):
     """
@@ -236,7 +282,9 @@ def ensure_a2sb_input_format(segment):
     """
     return segment.set_frame_rate(44100).set_sample_width(2)
 
+
 # --- Main Logic with Progress ---
+
 
 def normalize_input_files(input_files):
     if not input_files:
@@ -273,7 +321,9 @@ def normalize_staged_paths(staged_paths_text):
 def merge_input_sources(uploaded_files, staged_paths_text):
     merged = []
     seen = set()
-    for path in normalize_input_files(uploaded_files) + normalize_staged_paths(staged_paths_text):
+    for path in normalize_input_files(uploaded_files) + normalize_staged_paths(
+        staged_paths_text
+    ):
         if path in seen:
             continue
         seen.add(path)
@@ -295,7 +345,9 @@ def list_staged_files(staged_paths_text):
     return "\n".join(lines)
 
 
-def restore_one_audio(input_file, steps, cutoff_hz, batch_size, progress, file_index, total_files):
+def restore_one_audio(
+    input_file, steps, cutoff_hz, batch_size, progress, file_index, total_files
+):
     try:
         audio = AudioSegment.from_file(input_file)
         audio = ensure_a2sb_input_format(audio)
@@ -345,37 +397,53 @@ def restore_one_audio(input_file, steps, cutoff_hz, batch_size, progress, file_i
     final_filtered_audio = None
 
     if audio.channels == 1:
-        restored_path, filtered_seg = process_channel(audio, "mono", "Mono Channel", 0.1, 0.9)
+        restored_path, filtered_seg = process_channel(
+            audio, "mono", "Mono Channel", 0.1, 0.9
+        )
         final_filtered_audio = filtered_seg
         AudioSegment.from_file(restored_path).export(final_output_path, format="wav")
 
     elif audio.channels == 2:
-        update_file_progress(0.1, f"[{file_index + 1}/{total_files}] Splitting Stereo Channels...")
+        update_file_progress(
+            0.1, f"[{file_index + 1}/{total_files}] Splitting Stereo Channels..."
+        )
         channels = audio.split_to_mono()
 
-        out_l_path, filtered_l = process_channel(channels[0], "left", "Left Channel", 0.15, 0.5)
-        out_r_path, filtered_r = process_channel(channels[1], "right", "Right Channel", 0.5, 0.85)
+        out_l_path, filtered_l = process_channel(
+            channels[0], "left", "Left Channel", 0.15, 0.5
+        )
+        out_r_path, filtered_r = process_channel(
+            channels[1], "right", "Right Channel", 0.5, 0.85
+        )
 
-        update_file_progress(0.85, f"[{file_index + 1}/{total_files}] Recombining Stereo Channels...")
+        update_file_progress(
+            0.85, f"[{file_index + 1}/{total_files}] Recombining Stereo Channels..."
+        )
         restored_l = AudioSegment.from_file(out_l_path)
         restored_r = AudioSegment.from_file(out_r_path)
 
         restored_stereo = AudioSegment.from_mono_audiosegments(restored_l, restored_r)
         restored_stereo.export(final_output_path, format="wav")
 
-        final_filtered_audio = AudioSegment.from_mono_audiosegments(filtered_l, filtered_r)
+        final_filtered_audio = AudioSegment.from_mono_audiosegments(
+            filtered_l, filtered_r
+        )
 
     else:
         raise gr.Error(f"Unsupported channels: {audio.channels}")
 
-    update_file_progress(0.9, f"[{file_index + 1}/{total_files}] Generating Spectral Analysis...")
+    update_file_progress(
+        0.9, f"[{file_index + 1}/{total_files}] Generating Spectral Analysis..."
+    )
     final_filtered_audio.export(comparison_input_path, format="wav")
     plot_path = generate_comparison_plot(comparison_input_path, final_output_path)
     update_file_progress(1.0, f"[{file_index + 1}/{total_files}] Done!")
     return final_output_path, plot_path
 
 
-def restore_audio(input_files, steps, cutoff_choice, batch_size, progress=gr.Progress()):
+def restore_audio(
+    input_files, steps, cutoff_choice, batch_size, progress=gr.Progress()
+):
     files = normalize_input_files(input_files)
     if not files:
         raise gr.Error(
@@ -388,7 +456,10 @@ def restore_audio(input_files, steps, cutoff_choice, batch_size, progress=gr.Pro
 
     try:
         for idx, input_file in enumerate(files):
-            progress(idx / len(files), desc=f"[{idx + 1}/{len(files)}] Initializing & Loading Audio...")
+            progress(
+                idx / len(files),
+                desc=f"[{idx + 1}/{len(files)}] Initializing & Loading Audio...",
+            )
             restored_path, plot_path = restore_one_audio(
                 input_file,
                 steps,
@@ -438,7 +509,9 @@ def select_preview(selection, restored_outputs, plot_outputs):
     return restored_outputs[selected_index], plot_outputs[selected_index]
 
 
-def process_batch(input_files, staged_paths, steps, cutoff_choice, batch_size, progress=gr.Progress()):
+def process_batch(
+    input_files, staged_paths, steps, cutoff_choice, batch_size, progress=gr.Progress()
+):
     files = merge_input_sources(input_files, staged_paths)
     if not files:
         raise gr.Error(
@@ -459,7 +532,9 @@ def process_batch(input_files, staged_paths, steps, cutoff_choice, batch_size, p
 
     preview_choices = build_preview_choices(restored_outputs)
     initial_selection = preview_choices[0] if preview_choices else None
-    preview_audio, preview_plot = select_preview(initial_selection, restored_outputs, plot_outputs)
+    preview_audio, preview_plot = select_preview(
+        initial_selection, restored_outputs, plot_outputs
+    )
 
     return (
         restored_outputs,
@@ -471,6 +546,7 @@ def process_batch(input_files, staged_paths, steps, cutoff_choice, batch_size, p
         preview_audio,
         preview_plot,
     )
+
 
 # --- Interface ---
 
@@ -507,7 +583,9 @@ if __name__ == "__main__":
                 )
                 list_staged_button = gr.Button("List Staged Files")
                 staged_preview = gr.Markdown("No staged files listed yet.")
-                steps = gr.Slider(minimum=10, maximum=200, value=50, step=10, label="Steps (Quality)")
+                steps = gr.Slider(
+                    minimum=10, maximum=200, value=50, step=10, label="Steps (Quality)"
+                )
                 cutoff_choice = gr.Dropdown(
                     choices=["4kHz", "14kHz", "16kHz"],
                     value="14kHz",
@@ -525,7 +603,9 @@ if __name__ == "__main__":
                 download_files = gr.Files(label="Download Restored Result(s)")
 
             with gr.Column(scale=1):
-                preview_choice = gr.Dropdown(choices=[], label="Preview Restored File", interactive=True)
+                preview_choice = gr.Dropdown(
+                    choices=[], label="Preview Restored File", interactive=True
+                )
                 preview_audio = gr.Audio(label="Restored Preview")
                 preview_plot = gr.Image(label="Spectral Analysis")
                 gallery = gr.Gallery(label="All Spectrograms", columns=2, height="auto")
