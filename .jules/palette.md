@@ -1,0 +1,3 @@
+## 2026-04-22 - Replacing Wall-of-Text Explanations with Localized Info
+**Learning:** Avoid wall-of-text explanations at the top of the app which often go unread and crowd the interface. The `info` parameter for supported Gradio components (e.g. Textbox, Slider) improves discoverability directly at the point of interaction. For components like `gr.File` that lack `info` support, placing a localized `gr.Markdown` block directly beneath the component prevents cluttering the main layout or label while keeping the context attached.
+**Action:** Replace top-level descriptive blocks with `info=` kwarg on applicable inputs. When `info` isn't supported, use a small `gr.Markdown` right near the component.
