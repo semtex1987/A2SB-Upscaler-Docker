@@ -234,6 +234,9 @@ def ensure_a2sb_input_format(segment):
     specify sampling_rate=44100.  The data loader resamples to that rate on load, so
     feeding 48kHz here only adds a needless lossy resample round-trip.
     """
+    # ⚡ Bolt: Fast-path to avoid redundant pydub processing and object creation
+    if segment.frame_rate == 44100 and segment.sample_width == 2:
+        return segment
     return segment.set_frame_rate(44100).set_sample_width(2)
 
 # --- Main Logic with Progress ---

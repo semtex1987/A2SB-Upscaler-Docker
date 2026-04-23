@@ -8,3 +8,7 @@
 ## 2026-04-06 - Precalculate ML model refs before loops
 **Learning:** Hoisting model retrieval logic (e.g., `get_vf_model`) outside of tight diffusion sampling loops by pre-calculating model references for all timesteps significantly reduces Python overhead per iteration.
 **Action:** When implementing iterative sampling algorithms, precompute state variables such as model partitions to avoid redundant O(N) lookup overhead on every step.
+
+## 2024-05-18 - Fast-path pydub formatting
+**Learning:** In `pydub`, methods like `set_frame_rate` and `set_sample_width` incur overhead from object creation and internal processing even when the requested values match the current audio state.
+**Action:** Implement a fast-path check (e.g., `if segment.frame_rate == 44100 and segment.sample_width == 2: return segment`) to return the segment immediately if it already meets target specifications, avoiding redundant processing.
