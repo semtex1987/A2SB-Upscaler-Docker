@@ -1,0 +1,3 @@
+## 2024-05-17 - Gradio Component `info` Usage
+**Learning:** Wall-of-text instructions at the top of a Gradio interface create unnecessary cognitive load. Users often miss them or forget the details by the time they interact with the relevant component down the page. Native Gradio components (like `gr.Slider`, `gr.Textbox`, `gr.Dropdown`) support an `info` parameter specifically designed to render small, helpful helper text directly below the label.
+**Action:** Always favor contextual component `info` properties over top-level `gr.Markdown` blocks for conveying field-specific guidance, limits, and examples in Gradio UIs.
