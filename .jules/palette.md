@@ -1,0 +1,3 @@
+## 2024-04-26 - [Use inline info tooltips for Gradio input components]
+**Learning:** Wall-of-text explanations at the top of a UI cause cognitive overload and are often ignored. When explanatory text is physically separated from the interactive elements it describes, users struggle to map the instructions to their actions.
+**Action:** Use the `info` parameter for supported Gradio components (e.g., Textbox, Slider) to move instructional text directly below the component's label. For elements lacking this parameter, use localized `gr.Markdown` blocks adjacent to them, rather than clustering all instructions at the top of the layout.
