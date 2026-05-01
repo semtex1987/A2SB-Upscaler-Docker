@@ -1,0 +1,3 @@
+## 2026-05-01 - Replace UI Wall-of-Text with Component Info properties
+**Learning:** Gradio interfaces can quickly become overwhelming with large introductory markdown blocks explaining how to use parameters. Utilizing the `info` property of individual components (like `gr.Slider` or `gr.Textbox`) places instructions directly in context, improving discoverability and maintaining a cleaner overall layout. Components without `info` support (like `gr.File`) can use adjacent localized `gr.Markdown` blocks.
+**Action:** When building or updating Gradio applications, always associate parameter-specific documentation with the component itself via the `info` parameter rather than clustering it at the top of the app.
