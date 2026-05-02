@@ -127,9 +127,10 @@ class TimePartitionedPretrainedSTFTBridgeModel(LightningModule):
         # ⚡ Bolt: Hoisting model retrieval logic outside the loop
         vf_models = [self.get_vf_model(t_steps[0, i].item()) for i in range(n_steps)]
 
+        t_embs_precalc = self.t_to_emb(t_steps[0, :n_steps])
         for t_idx in range(n_steps):
             # print(t_idx)
-            t_emb = self.t_to_emb(t_steps[:,t_idx]).repeat(x_1.shape[0], 1)
+            t_emb = t_embs_precalc[t_idx:t_idx+1].repeat(x_1.shape[0], 1)
             t = t_steps[:, t_idx]
             t_prev = t_steps[:, t_idx+1]
             #vf_output = self.get_vf_model(t[0].item())(x_t, t_emb)
@@ -260,9 +261,10 @@ class STFTBridgeModel(LightningModule):
         pred_x0 = None
         all_pred_x0s = []
 
+        t_embs_precalc = self.t_to_emb(t_steps[0, :n_steps])
         for t_idx in range(n_steps):
 
-            t_emb = self.t_to_emb(t_steps[:,t_idx]).repeat(x_1.shape[0], 1)
+            t_emb = t_embs_precalc[t_idx:t_idx+1].repeat(x_1.shape[0], 1)
             t = t_steps[:, t_idx] 
             t_prev = t_steps[:, t_idx+1] 
             vf_output = self.vf_model(x_t, t_emb)
@@ -296,9 +298,10 @@ class STFTBridgeModel(LightningModule):
         pred_x0 = None
         all_pred_x0s = []
 
+        t_embs_precalc = self.t_to_emb(t_steps[0, :n_steps])
         for t_idx in range(n_steps):
 
-            t_emb = self.t_to_emb(t_steps[:,t_idx]).repeat(x_1.shape[0], 1)
+            t_emb = t_embs_precalc[t_idx:t_idx+1].repeat(x_1.shape[0], 1)
             t = t_steps[:, t_idx]
             t_prev = t_steps[:, t_idx+1]
 
@@ -334,9 +337,10 @@ class STFTBridgeModel(LightningModule):
         pred_x0 = None
         all_pred_x0s = []
 
+        t_embs_precalc = self.t_to_emb(t_steps[0, :n_steps])
         for t_idx in range(n_steps):
 
-            t_emb = self.t_to_emb(t_steps[:,t_idx]).repeat(x_1.shape[0], 1)
+            t_emb = t_embs_precalc[t_idx:t_idx+1].repeat(x_1.shape[0], 1)
             t = t_steps[:, t_idx] 
             t_prev = t_steps[:, t_idx+1] 
             vf_output = self.vf_model(x_t, t_emb)
