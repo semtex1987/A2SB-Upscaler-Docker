@@ -1,0 +1,3 @@
+## $(date +%Y-%m-%d) - Contextual Help in Gradio
+**Learning:** Avoid wall-of-text explanations at the top of the app. Use the `info` parameter for supported components (e.g., Textbox, Slider) to improve discoverability. For components like `gr.File` that lack `info` support, use localized `gr.Markdown` blocks directly adjacent to the component with utility classes (e.g., `elem_classes=["text-sm", "text-gray-500", "mb-1"]`) to match the visual hierarchy of native component labels and info text.
+**Action:** Always distribute instructional text to the relevant UI components to reduce clutter and provide contextual help.
