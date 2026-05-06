@@ -1,0 +1,3 @@
+## 2024-05-24 - Gradio Component Helper Text (Info vs Markdown)
+**Learning:** Avoid wall-of-text explanations at the top of forms. Gradio form components like `gr.Textbox` and `gr.Slider` support an `info` parameter to place descriptions inline. For components like `gr.File` that lack `info` support, localized `gr.Markdown` with utility classes (e.g., `elem_classes="text-sm text-gray-500 mb-1"`) maintains visual hierarchy without cluttering the global UI.
+**Action:** Move explanatory text closer to the controls they describe using the `info` parameter or localized text instead of monolithic instruction blocks.
