@@ -1,0 +1,3 @@
+## $(date +%Y-%m-%d) - [Moved explanation text to inline info components]
+**Learning:** Avoid wall-of-text explanations at the top of the app. Gradio supports an `info` parameter for components like `Textbox` and `Slider` to improve discoverability. For components like `gr.File` that lack `info` support, we can use a localized `gr.Markdown` block directly adjacent to the component using utility classes (e.g., `text-sm text-gray-500 mb-1`) to match the visual hierarchy of native component labels and info text.
+**Action:** Always favor inline `info` parameters over global Markdown blocks to provide context where the user actually interacts with the component.
