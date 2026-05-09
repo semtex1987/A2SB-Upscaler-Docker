@@ -8,3 +8,7 @@
 ## 2026-04-06 - Precalculate ML model refs before loops
 **Learning:** Hoisting model retrieval logic (e.g., `get_vf_model`) outside of tight diffusion sampling loops by pre-calculating model references for all timesteps significantly reduces Python overhead per iteration.
 **Action:** When implementing iterative sampling algorithms, precompute state variables such as model partitions to avoid redundant O(N) lookup overhead on every step.
+
+## 2026-05-09 - Vectorize temporal embeddings outside DDPM loops
+**Learning:** DDPM sampling loops frequently evaluate deterministic tensor operations like temporal embeddings (`self.t_to_emb`) on per-timestep basis inside the loop. This incurs O(N) overhead.
+**Action:** Precalculate and vectorize these embeddings outside the loop (e.g., `t_embs = self.t_to_emb(t_steps[0, :n_steps])`) and index them inside the loop.
