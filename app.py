@@ -494,6 +494,10 @@ if __name__ == "__main__":
 
         with gr.Row():
             with gr.Column(scale=1):
+                gr.Markdown(
+                    "Supports .wav, .flac, .mp3 and other common audio formats.",
+                    elem_classes=["text-sm", "text-gray-500", "mb-1"],
+                )
                 input_files = gr.File(
                     file_count="multiple",
                     type="filepath",
