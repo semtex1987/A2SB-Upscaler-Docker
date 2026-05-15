@@ -16,3 +16,9 @@
 ## 2024-05-18 - Precalculate temporal embeddings
 **Learning:** In DDPM sampling loops, computing temporal embeddings inside the loop using `t_to_emb` introduces unnecessary overhead. Since `t_steps` are known ahead of time, we can precalculate all embeddings in a single batched pass.
 **Action:** Always precalculate and vectorize deterministic tensor operations like temporal embeddings outside of iterative loops. Use `.unsqueeze()` and `.repeat()` to construct a tensor matching the required loop output shape, so the loop can simply perform a fast index lookup.
+## 2025-05-18 - Optimize librosa spectral feature overlap
+**Learning:**  and  compute STFTs with a default  that is 1/4 of  (75% overlap). When only needing macroscopic metrics (e.g., mean flatness over the whole clip), this overlap represents a massive, redundant computational overhead.
+**Action:** Always increase  to equal  (e.g., ) for such heuristic calculations to remove overlap, making the operation roughly 4x faster without skewing the mean values.
+## 2025-05-18 - Optimize librosa spectral feature overlap
+**Learning:** `librosa.feature.spectral_flatness` and `librosa.feature.spectral_rolloff` compute STFTs with a default `hop_length` that is 1/4 of `n_fft` (75% overlap). When only needing macroscopic metrics (e.g., mean flatness over the whole clip), this overlap represents a massive, redundant computational overhead.
+**Action:** Always increase `hop_length` to equal `n_fft` (e.g., `n_fft=2048, hop_length=2048`) for such heuristic calculations to remove overlap, making the operation roughly 4x faster without skewing the mean values.
