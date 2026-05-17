@@ -142,16 +142,31 @@ class MixAudioDataset(torch.utils.data.Dataset):
         return len(self.mapped_list)
 
     def load_wav_to_torch(self, audiopath, start_time=None, end_time=None):
-        audio, sr = librosa.load(audiopath, sr=None)
+        # ⚡ Bolt: Load only the required segment instead of the entire audio file.
+        # Retrieve the total duration first to calculate valid boundary offsets,
+        # preventing extraction windows from exceeding the end of the file.
+        total_duration = librosa.get_duration(path=audiopath)
+        seg_sec = self.segment_length / float(self.sampling_rate)
+
+        offset = start_time if start_time is not None else 0.0
+
+        # Original logic shifted the crop window back if it exceeded the audio length.
+        # We apply that same logic here before loading.
+        if offset + seg_sec > total_duration:
+            offset = max(0.0, total_duration - seg_sec)
+
+        # librosa.load with offset/duration uses soundfile's seek under the hood,
+        # preventing full-file decoding and full-file resampling which are extremely slow.
+        # Add a tiny buffer (0.1s) for potential resampling boundary artifacts.
+        audio, sr = librosa.load(audiopath, sr=None, offset=offset, duration=seg_sec + 0.1)
+
         if len(audio.shape) != 1:
             audio = librosa.to_mono(audio.T)  # (L, 2) -> (2, L) -> mono-channel
         if sr != self.sampling_rate:
             audio = librosa.resample(audio, orig_sr=sr, target_sr=self.sampling_rate)
 
-        crop_start = floor(start_time * self.sampling_rate)
-        crop_start = max(0, min(crop_start, len(audio) - self.segment_length))
-
-        audio = audio[crop_start:crop_start+self.segment_length]
+        # Since we already shifted the offset correctly, we just take the first `segment_length` samples.
+        audio = audio[:self.segment_length]
         if len(audio) < self.segment_length:
             audio = np.pad(audio, (0, self.segment_length - len(audio)), 'constant')
 
