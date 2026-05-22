@@ -1,0 +1,3 @@
+## 2024-05-18 - Component-level helper text
+**Learning:** Prefer using the `info` attribute on components to provide contextual helper text instead of large, global `gr.Markdown` instruction blocks at the top of the app to improve user focus and interface clarity. When adding localized `gr.Markdown` helper text to Gradio components that lack `info` support (like `gr.File`), use `elem_classes` with a list of utility classes (e.g., `elem_classes=["text-sm", "text-gray-500", "mb-1"]`) to match the visual hierarchy of native component labels and info text.
+**Action:** Use component 'info' parameters to contextualize settings instead of long global headers.
