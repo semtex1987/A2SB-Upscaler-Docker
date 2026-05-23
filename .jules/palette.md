@@ -1,0 +1,3 @@
+## 2026-05-23 - Contextual Help in Gradio UIs
+**Learning:** Large global `gr.Markdown` instruction blocks at the top of a Gradio interface can easily be ignored by users and clutter the layout. Moving these instructions to localized context improves focus. However, not all Gradio components support the `info` attribute (e.g., `gr.File`).
+**Action:** When adding helper text, use the `info` attribute for compatible components (like `gr.Slider` or `gr.Textbox`). For components that lack `info` support (like `gr.File`), use a localized `gr.Markdown` block directly above the component, styled with `elem_classes=["text-sm", "text-gray-500", "mb-1"]` to mimic the visual hierarchy of native tooltips.
