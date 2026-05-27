@@ -1,0 +1,3 @@
+## 2024-06-12 - Gradio UI Info Properties
+**Learning:** For Gradio interfaces, using `gr.Markdown` to present global instructions at the top of an app creates a disconnected, cluttered reading experience. Native component `info` properties provide contextual helper text inline with the relevant controls, dramatically improving the user focus, layout cleanliness, and proximity-based accessibility. For components lacking the `info` property (like `gr.File`), this structure can be simulated by placing a `gr.Markdown` directly above with visual utility classes (e.g. `elem_classes=["text-sm", "text-gray-500", "mb-1"]`).
+**Action:** Always prefer `info` or tightly-coupled localized descriptive text over large global instruction blocks for complex UIs.
