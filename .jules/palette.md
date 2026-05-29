@@ -1,0 +1,3 @@
+## 2024-05-14 - Gradio Contextual Helper Text
+**Learning:** In Gradio applications, large blocks of instructional text at the top of the app (`gr.Markdown`) increase cognitive load and visual clutter.
+**Action:** When possible, move instructions directly to the specific inputs they reference using the `info` parameter (supported by `gr.Textbox`, `gr.Slider`, `gr.Dropdown`, etc.). For components that lack `info` support (like `gr.File`), use small `gr.Markdown` elements placed immediately above the input with muted styling (`elem_classes=["text-sm", "text-gray-500", "mb-1"]`) to maintain visual consistency.
