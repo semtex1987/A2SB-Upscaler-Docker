@@ -1,0 +1,3 @@
+## 2026-05-30 - Contextual component help
+**Learning:** Replacing global instruction blocks at the top of a Gradio app with contextual `info` attributes on individual components significantly reduces visual clutter and provides help exactly where the user is looking. For components that lack `info` support (like `gr.File`), a preceding `gr.Markdown` with small, gray text classes (`elem_classes=["text-sm", "text-gray-500", "mb-1"]`) matches the native UI nicely.
+**Action:** Always prefer contextual helper text (via `info` or styled text blocks) over large, monolithic instruction blocks that users tend to ignore.
