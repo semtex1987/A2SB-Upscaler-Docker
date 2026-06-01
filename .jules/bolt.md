@@ -16,3 +16,6 @@
 ## 2024-05-18 - Precalculate temporal embeddings
 **Learning:** In DDPM sampling loops, computing temporal embeddings inside the loop using `t_to_emb` introduces unnecessary overhead. Since `t_steps` are known ahead of time, we can precalculate all embeddings in a single batched pass.
 **Action:** Always precalculate and vectorize deterministic tensor operations like temporal embeddings outside of iterative loops. Use `.unsqueeze()` and `.repeat()` to construct a tensor matching the required loop output shape, so the loop can simply perform a fast index lookup.
+## 2025-02-28 - Mocking deep hierarchical dependencies
+**Learning:** When testing modules with deep hierarchical dependencies (like `datasets.py` importing `torch.nn.functional` or `einops`), standard `sys.modules['lib'] = MagicMock()` isn't enough because imports like `from lib.module import x` or `class Subclass(lib.module.Base)` will fail.
+**Action:** Use a custom `MagicMock` subclass (e.g., `class MockModule(mock.MagicMock): @classmethod def __getattr__(cls, name): return mock.MagicMock()`) to recursively mock attributes and prevent `AttributeError` or `ModuleNotFoundError` during import resolution in sandboxed environments.
