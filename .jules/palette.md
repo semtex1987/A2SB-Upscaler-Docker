@@ -1,0 +1,3 @@
+## 2026-06-02 - Localized Context with info Attributes
+**Learning:** Moving large, global `gr.Markdown` instruction blocks at the top of the app into individual component `info` attributes significantly reduces cognitive load and improves accessibility. It ties context directly to the interaction point. For components like `gr.File` that do not support `info`, using a localized `gr.Markdown` with matching utility classes (e.g. `elem_classes=["text-sm", "text-gray-500", "mb-1"]`) perfectly mimics the native hierarchy and visual language.
+**Action:** Always prefer localized help text over global instructions. Use the `info` attribute when available, and fall back to explicitly classed localized Markdown strings for unsupported components to maintain visual consistency.
