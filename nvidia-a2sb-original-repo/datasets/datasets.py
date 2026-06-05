@@ -142,16 +142,26 @@ class MixAudioDataset(torch.utils.data.Dataset):
         return len(self.mapped_list)
 
     def load_wav_to_torch(self, audiopath, start_time=None, end_time=None):
-        audio, sr = librosa.load(audiopath, sr=None)
+        # ⚡ Bolt: Use get_duration and pass offset/duration to librosa.load to avoid
+        # loading the entire audio file into memory just to extract a tiny segment.
+        file_duration = librosa.get_duration(path=audiopath)
+        target_duration = self.segment_length / self.sampling_rate
+
+        # Calculate actual start time, ensuring we don't seek past the end
+        actual_start = max(0.0, min(start_time, file_duration - target_duration))
+
+        # Load the specific segment (with a tiny buffer to account for resampling rounding differences)
+        buffer_duration = 0.05
+        load_duration = min(target_duration + buffer_duration, file_duration - actual_start)
+
+        audio, sr = librosa.load(audiopath, sr=None, offset=actual_start, duration=load_duration)
         if len(audio.shape) != 1:
             audio = librosa.to_mono(audio.T)  # (L, 2) -> (2, L) -> mono-channel
         if sr != self.sampling_rate:
             audio = librosa.resample(audio, orig_sr=sr, target_sr=self.sampling_rate)
 
-        crop_start = floor(start_time * self.sampling_rate)
-        crop_start = max(0, min(crop_start, len(audio) - self.segment_length))
-
-        audio = audio[crop_start:crop_start+self.segment_length]
+        # Truncate or pad to exactly segment_length
+        audio = audio[:self.segment_length]
         if len(audio) < self.segment_length:
             audio = np.pad(audio, (0, self.segment_length - len(audio)), 'constant')
 
