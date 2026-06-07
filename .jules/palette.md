@@ -1,0 +1,3 @@
+## YYYY-MM-DD - Distributing global instructions to localized contextual hints
+**Learning:** Moving large, global markdown instruction blocks from the top of the interface into the `info` attribute of specific components significantly reduces cognitive load and keeps user focus directly on the inputs they are interacting with. For components without an `info` prop (like `gr.File`), adding a small `gr.Markdown` block with `elem_classes=["text-sm", "text-gray-500", "mb-1"]` successfully mimics native label hierarchy.
+**Action:** Always prefer localized component-level tooltips or `info` text over massive introductory instruction blocks to improve form clarity and screen-reader context.
