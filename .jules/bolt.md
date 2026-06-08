@@ -16,3 +16,6 @@
 ## 2024-05-18 - Precalculate temporal embeddings
 **Learning:** In DDPM sampling loops, computing temporal embeddings inside the loop using `t_to_emb` introduces unnecessary overhead. Since `t_steps` are known ahead of time, we can precalculate all embeddings in a single batched pass.
 **Action:** Always precalculate and vectorize deterministic tensor operations like temporal embeddings outside of iterative loops. Use `.unsqueeze()` and `.repeat()` to construct a tensor matching the required loop output shape, so the loop can simply perform a fast index lookup.
+## 2025-06-08 - Optimize librosa spectral feature overlap
+**Learning:** librosa.feature.spectral_flatness and spectral_rolloff are severe computational bottlenecks with default arguments.
+**Action:** Explicitly increase hop_length and n_fft to avoid 75% STFT overlap.
