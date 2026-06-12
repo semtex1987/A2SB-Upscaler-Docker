@@ -214,7 +214,11 @@ class TimePartitionedPretrainedSTFTBridgeModel(LightningModule):
 
         reconstructed_audio = self.vocode_stft(x_0s[-1].cpu())[0].cpu().data.numpy()
         input_audio = self.vocode_stft(x_0_corrupted.cpu())[0].cpu().data.numpy()
-        write_wav(self.output_audio_filename, batch['output_sr'], reconstructed_audio)
+        # scipy infers the WAV encoding from the array dtype; writing float32
+        # yields a 32-bit float WAV (2x the size of the 16-bit source) that the
+        # downstream pydub/ffmpeg re-export preserves. Emit 16-bit PCM instead.
+        reconstructed_int16 = (np.clip(reconstructed_audio, -1.0, 1.0) * 32767.0).astype(np.int16)
+        write_wav(self.output_audio_filename, batch['output_sr'], reconstructed_int16)
         # write_wav(os.path.join(current_out_dir, "recon.wav"), batch['output_sr'], reconstructed_audio)
         # write_wav(os.path.join(current_out_dir, "dirty.wav"), batch['output_sr'], input_audio)
 

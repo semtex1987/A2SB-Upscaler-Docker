@@ -88,6 +88,7 @@ data:
     CURATED:
       root_folder: /data/training_output
       filename: finetune_manifest.csv
+      apply_sr_loss_mask: true
   segment_length: 130560
   sampling_rate: 44100
   num_workers: 4
@@ -96,14 +97,14 @@ data:
   transforms_aug:
     - class_path: corruption.corruptions.MultinomialInpaintMaskTransform
       init_args:
-        p_upsample_mask: 0.5
+        p_upsample_mask: 1.0
         p_extension_mask: 0.0
-        p_inpaint_mask: 0.5
+        p_inpaint_mask: 0.0
         fill_noise_level: 0.5
         sampling_rate: 44100
         upsample_mask_kwargs:
-          min_cutoff_freq: 2000
-          max_cutoff_freq: 20000
+          min_cutoff_freq: 8000
+          max_cutoff_freq: 16000
         inpainting_mask_kwargs:
           min_inpainting_frac: 0.03378
           max_inpainting_frac: 0.5404
@@ -111,14 +112,14 @@ data:
   eval_transforms_aug:
     - class_path: corruption.corruptions.MultinomialInpaintMaskTransform
       init_args:
-        p_upsample_mask: 0.5
+        p_upsample_mask: 1.0
         p_extension_mask: 0.0
-        p_inpaint_mask: 0.5
+        p_inpaint_mask: 0.0
         fill_noise_level: 0.5
         sampling_rate: 44100
         upsample_mask_kwargs:
-          min_cutoff_freq: 4000
-          max_cutoff_freq: 4000
+          min_cutoff_freq: 14000
+          max_cutoff_freq: 14000
         inpainting_mask_kwargs:
           min_inpainting_frac: 0.1013
           max_inpainting_frac: 0.1013
@@ -147,3 +148,4 @@ checkpoint_callback:
   every_n_train_steps: 1000
   save_top_k: -1
   auto_insert_metric_name: false
+  save_last: true

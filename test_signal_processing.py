@@ -1,4 +1,3 @@
-import numpy as np
 import unittest
 import sys
 from unittest.mock import MagicMock
@@ -18,6 +17,7 @@ sys.modules['pydub'] = mock_pydub
 
 # Import the actual function from app
 try:
+    import numpy as np
     from app import butter_lowpass_filter
     from scipy.signal import butter, sosfilt
 
@@ -27,6 +27,7 @@ try:
         for obj in (np, butter_lowpass_filter, butter, sosfilt)
     )
 except ImportError:
+    np = None
     HAS_SCIPY = False
 
 

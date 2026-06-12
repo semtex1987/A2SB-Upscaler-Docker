@@ -34,6 +34,12 @@ docker compose -f training/docker-compose.train.yml run trainer \
   python /app/training/finetune.py --splits 0.0-0.5 --steps 10000 --batch-size 4
 ```
 
+## Data requirements
+
+Training audio must be genuinely full-bandwidth (lossless or CD-quality sources, **not** MP3-derived). The manifest now records each file's estimated true bandwidth (2× the 99th-percentile spectral rolloff). Files whose estimated bandwidth falls below 16 kHz will be excluded by the `apply_sr_loss_mask` filter in the dataset config — band-limited training material would otherwise teach the model to output silence in the high band.
+
+`--steps` is relative to the **resumed** global step of the release checkpoint. The previous behavior started counting from the checkpoint's existing step count and stopped immediately because `max_steps` was already exceeded. The updated `finetune.py` offsets `max_steps` by the checkpoint's `global_step` so the requested number of steps is always trained.
+
 ## Shell access
 
 To get a shell inside the training container:
