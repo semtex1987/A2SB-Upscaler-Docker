@@ -16,3 +16,7 @@
 ## 2024-05-18 - Precalculate temporal embeddings
 **Learning:** In DDPM sampling loops, computing temporal embeddings inside the loop using `t_to_emb` introduces unnecessary overhead. Since `t_steps` are known ahead of time, we can precalculate all embeddings in a single batched pass.
 **Action:** Always precalculate and vectorize deterministic tensor operations like temporal embeddings outside of iterative loops. Use `.unsqueeze()` and `.repeat()` to construct a tensor matching the required loop output shape, so the loop can simply perform a fast index lookup.
+
+## 2026-06-12 - Lazy load audio segments
+**Learning:** When extracting short audio segments from large files, avoid reading the entire file into memory with `librosa.load` defaults. Instead, compute valid segment boundaries using `librosa.get_duration` to prevent out-of-bounds errors, then lazily fetch only the required frames by passing `offset` and `duration` arguments to `librosa.load` (which utilizes `soundfile`'s seek mechanism under the hood).
+**Action:** Always use targeted offset/duration loading for sub-segment extraction from large dataset files to prevent severe memory and I/O bottlenecks.
