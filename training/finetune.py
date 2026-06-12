@@ -59,7 +59,10 @@ def estimate_true_sr(path: str) -> int:
         import librosa
         import numpy as np
         y, sr = librosa.load(path, sr=None, mono=True, duration=60.0)
-        rolloff = float(np.mean(librosa.feature.spectral_rolloff(y=y, sr=sr, roll_percent=0.99)))
+        # Mean of per-frame rolloff underestimates bandwidth when HF content is
+        # intermittent (quiet passages drag it down); take a high percentile.
+        rolloff_frames = librosa.feature.spectral_rolloff(y=y, sr=sr, roll_percent=0.99)
+        rolloff = float(np.percentile(rolloff_frames, 95))
         return int(min(2 * rolloff, 44100))
     except Exception:
         return 44100
@@ -102,6 +105,12 @@ def build_manifest(
     n_train = len(rows) - n_val
     train_rows = rows[:n_train]
     val_rows = rows[n_train:]
+
+    if not train_rows:
+        raise SystemExit(
+            "No training samples remain after the train/validation split. "
+            "Lower --val-frac or add more audio files."
+        )
 
     # Estimate true bandwidth for each file; warn about narrow-band files.
     narrow_band_files: list[str] = []

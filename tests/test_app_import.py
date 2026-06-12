@@ -34,8 +34,10 @@ class TestAppImport(unittest.TestCase):
         except Exception as e:
             self.fail(f"Importing app failed with error: {e}")
 
-        assert not gradio.Interface.return_value.launch.called, \
+        self.assertFalse(
+            gradio.Interface.return_value.launch.called,
             "gr.Interface().launch() was called on import!"
+        )
 
     def test_app_functions_accessible(self):
         import app
