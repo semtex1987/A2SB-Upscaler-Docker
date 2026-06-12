@@ -240,6 +240,13 @@ class STFTBridgeModel(LightningModule):
                                       weight_decay=self.weight_decay, decoupled_weight_decay=True)
         return optimizer
 
+    def on_train_start(self):
+        # Resuming from --ckpt_path restores the optimizer state including the
+        # original param-group learning rate; enforce the configured one.
+        for opt in self.trainer.optimizers:
+            for group in opt.param_groups:
+                group["lr"] = self.learning_rate
+
     def ddpm_sample(self, x_1, t_steps=None, mask=None, mask_pred_x0=True):
         n_steps = t_steps.shape[1] - 1
 

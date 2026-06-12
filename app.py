@@ -92,47 +92,46 @@ def apply_lowpass_to_segment(segment, cutoff_freq_hz):
 
 def generate_comparison_plot(original_path, restored_path):
     """
-    Generates a side-by-side Mel-spectrogram comparison.
+    Generates a side-by-side linear-frequency STFT comparison.
     """
     # ⚡ Bolt: Load audio files with sr=None to avoid slow default resampling to 22050Hz
     # This significantly speeds up spectrogram generation after inference
     y_orig, sr_orig = librosa.load(original_path, sr=None)
     y_rest, sr_rest = librosa.load(restored_path, sr=None)
 
-    # Compute Mel Spectrograms
-    # Use the restored sample rate as the max freq reference for both plots so they match visually
-    fmax = sr_rest / 2
+    # Linear-frequency STFT — mel-128 squashes 14–22 kHz into the top few bands,
+    # hiding exactly the band A2SB regenerates.
+    S_db_orig = librosa.amplitude_to_db(np.abs(librosa.stft(y_orig, n_fft=2048, hop_length=512)), ref=np.max)
+    S_db_rest = librosa.amplitude_to_db(np.abs(librosa.stft(y_rest, n_fft=2048, hop_length=512)), ref=np.max)
 
-    S_orig = librosa.feature.melspectrogram(y=y_orig, sr=sr_orig, n_mels=128, fmax=fmax)
-    S_db_orig = librosa.power_to_db(S_orig, ref=np.max)
-
-    S_rest = librosa.feature.melspectrogram(y=y_rest, sr=sr_rest, n_mels=128, fmax=fmax)
-    S_db_rest = librosa.power_to_db(S_rest, ref=np.max)
-
-    # FIX: Use constrained_layout=True to handle colorbars automatically
     fig, ax = plt.subplots(nrows=2, ncols=1, sharex=True, sharey=True, figsize=(12, 8), constrained_layout=True)
-    
-    # Plot Original
-    img1 = librosa.display.specshow(S_db_orig, x_axis='time', y_axis='mel', sr=sr_orig, fmax=fmax, ax=ax[0], cmap='inferno')
-    ax[0].set_title('Original (Filtered Input)')
-    ax[0].set(xlabel='') # Hide x label for top plot
 
-    # Plot Restored
-    img2 = librosa.display.specshow(S_db_rest, x_axis='time', y_axis='mel', sr=sr_rest, fmax=fmax, ax=ax[1], cmap='inferno')
+    img1 = librosa.display.specshow(S_db_orig, x_axis='time', y_axis='linear', sr=sr_orig, hop_length=512, ax=ax[0], cmap='inferno')
+    ax[0].set_title('Filtered Input')
+    ax[0].set(xlabel='')
+
+    img2 = librosa.display.specshow(S_db_rest, x_axis='time', y_axis='linear', sr=sr_rest, hop_length=512, ax=ax[1], cmap='inferno')
     ax[1].set_title('Restored Output (A2SB)')
 
-    # Add Colorbar
-    # Attaching it to 'ax' makes it span both plots nicely on the right
     fig.colorbar(img2, ax=ax, format='%+2.0f dB', label='Intensity (dB)')
-    
-    # Save Plot
+
     output_img_path = restored_path.replace(".wav", "_spectrogram.png")
-    
-    # FIX: Removed plt.tight_layout() as it conflicts with constrained_layout
     plt.savefig(output_img_path)
     plt.close()
-    
+
     return output_img_path
+
+
+def high_band_rms_db(path, cutoff_hz):
+    """RMS level (dBFS-ish, ref=1.0 full scale) of content at/above cutoff_hz."""
+    y, sr = librosa.load(path, sr=None)
+    spec = np.abs(librosa.stft(y, n_fft=2048, hop_length=512))
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=2048)
+    band = spec[freqs >= cutoff_hz, :]
+    if band.size == 0:
+        return -200.0
+    rms = float(np.sqrt(np.mean(band ** 2)))
+    return 20.0 * np.log10(max(rms, 1e-10))
 
 # --- Inference Functions ---
 
@@ -371,8 +370,13 @@ def restore_one_audio(input_file, steps, cutoff_hz, batch_size, progress, file_i
     update_file_progress(0.9, f"[{file_index + 1}/{total_files}] Generating Spectral Analysis...")
     final_filtered_audio.export(comparison_input_path, format="wav")
     plot_path = generate_comparison_plot(comparison_input_path, final_output_path)
+    hf_in_db = high_band_rms_db(comparison_input_path, cutoff_hz)
+    hf_out_db = high_band_rms_db(final_output_path, cutoff_hz)
+    hf_note = (f"energy ≥{int(cutoff_hz)} Hz: filtered input {hf_in_db:.1f} dB → "
+               f"restored {hf_out_db:.1f} dB ({hf_out_db - hf_in_db:+.1f} dB)")
+    print(f"[A2SB] {os.path.basename(input_file)} {hf_note}", flush=True)
     update_file_progress(1.0, f"[{file_index + 1}/{total_files}] Done!")
-    return final_output_path, plot_path
+    return final_output_path, plot_path, hf_note
 
 
 def restore_audio(input_files, steps, cutoff_choice, batch_size, progress=gr.Progress()):
@@ -382,14 +386,21 @@ def restore_audio(input_files, steps, cutoff_choice, batch_size, progress=gr.Pro
             "No input files found. Upload file(s), or use staged paths like /app/inputs/*.wav."
         )
 
-    cutoff_hz = int(cutoff_choice.lower().replace("khz", "")) * 1000
+    try:
+        cutoff_hz = int(float(cutoff_choice))
+    except (TypeError, ValueError):
+        raise gr.Error("Cutoff must be a number in Hz (e.g. 14000).")
+    if not 1000 <= cutoff_hz <= 20000:
+        raise gr.Error("Cutoff must be between 1000 and 20000 Hz.")
+
     restored_outputs = []
     plot_outputs = []
+    hf_notes = []
 
     try:
         for idx, input_file in enumerate(files):
             progress(idx / len(files), desc=f"[{idx + 1}/{len(files)}] Initializing & Loading Audio...")
-            restored_path, plot_path = restore_one_audio(
+            restored_path, plot_path, hf_note = restore_one_audio(
                 input_file,
                 steps,
                 cutoff_hz,
@@ -400,9 +411,10 @@ def restore_audio(input_files, steps, cutoff_choice, batch_size, progress=gr.Pro
             )
             restored_outputs.append(restored_path)
             plot_outputs.append(plot_path)
+            hf_notes.append(hf_note)
 
         progress(1.0, desc=f"Finished processing {len(files)} file(s)")
-        return restored_outputs, plot_outputs
+        return restored_outputs, plot_outputs, hf_notes
 
     except subprocess.CalledProcessError as e:
         print("STDERR:", e.stderr)
@@ -412,12 +424,15 @@ def restore_audio(input_files, steps, cutoff_choice, batch_size, progress=gr.Pro
         raise gr.Error(f"Processing error: {str(e)}")
 
 
-def summarize_results(restored_outputs):
+def summarize_results(restored_outputs, hf_notes):
     if not restored_outputs:
         return "No files processed yet."
     lines = [f"Processed {len(restored_outputs)} file(s):"]
-    for path in restored_outputs:
-        lines.append(f"- {os.path.basename(path)}")
+    for i, path in enumerate(restored_outputs):
+        if i < len(hf_notes):
+            lines.append(f"- {os.path.basename(path)} — {hf_notes[i]}")
+        else:
+            lines.append(f"- {os.path.basename(path)}")
     return "\n".join(lines)
 
 
@@ -449,7 +464,7 @@ def process_batch(input_files, staged_paths, steps, cutoff_choice, batch_size, p
         f"batch_size={int(batch_size)}",
         flush=True,
     )
-    restored_outputs, plot_outputs = restore_audio(
+    restored_outputs, plot_outputs, hf_notes = restore_audio(
         files,
         steps,
         cutoff_choice,
@@ -464,7 +479,7 @@ def process_batch(input_files, staged_paths, steps, cutoff_choice, batch_size, p
     return (
         restored_outputs,
         plot_outputs,
-        summarize_results(restored_outputs),
+        summarize_results(restored_outputs, hf_notes),
         gr.update(choices=preview_choices, value=initial_selection),
         restored_outputs,
         plot_outputs,
@@ -483,6 +498,12 @@ if __name__ == "__main__":
             "Lower batch size reduces VRAM usage at the cost of longer inference time. "
             "For H100/H200, 16-32 is a good starting range. For bandwidth extension, "
             "50-100 steps is usually the practical range."
+        )
+        gr.Markdown(
+            "Set the cutoff at or below where your source content degrades. "
+            "For MP3s, artifacts typically begin between 10–16 kHz depending on bitrate. "
+            "The results summary shows the high-band energy before and after restoration so you "
+            "can verify the model added content above the cutoff."
         )
         gr.Markdown(
             "Optional: stage files directly on the pod (for example with runpodctl) and "
@@ -508,10 +529,14 @@ if __name__ == "__main__":
                 list_staged_button = gr.Button("List Staged Files")
                 staged_preview = gr.Markdown("No staged files listed yet.")
                 steps = gr.Slider(minimum=10, maximum=200, value=50, step=10, label="Steps (Quality)")
-                cutoff_choice = gr.Dropdown(
-                    choices=["4kHz", "14kHz", "16kHz"],
-                    value="14kHz",
-                    label="Input Lowpass Filter (Cutoff)",
+                cutoff_choice = gr.Number(
+                    value=14000,
+                    minimum=1000,
+                    maximum=20000,
+                    step=100,
+                    label="Lowpass / Restoration Cutoff (Hz)",
+                    info="Set at or below where your source's content degrades. "
+                         "Release checkpoints are weak above ~12 kHz.",
                 )
                 batch_size = gr.Slider(
                     minimum=UI_BATCH_MIN,
