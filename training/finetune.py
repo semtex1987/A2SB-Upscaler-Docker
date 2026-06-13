@@ -61,7 +61,8 @@ def estimate_true_sr(path: str) -> int:
         y, sr = librosa.load(path, sr=None, mono=True, duration=60.0)
         # Mean of per-frame rolloff underestimates bandwidth when HF content is
         # intermittent (quiet passages drag it down); take a high percentile.
-        rolloff_frames = librosa.feature.spectral_rolloff(y=y, sr=sr, roll_percent=0.99)
+        # ⚡ Bolt: Increase hop_length/n_fft to avoid default 75% overlap overhead
+        rolloff_frames = librosa.feature.spectral_rolloff(y=y, sr=sr, roll_percent=0.99, n_fft=2048, hop_length=2048)
         rolloff = float(np.percentile(rolloff_frames, 95))
         return int(min(2 * rolloff, 44100))
     except Exception:
