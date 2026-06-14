@@ -60,7 +60,7 @@ def estimate_true_sr(y, sr, np, librosa) -> tuple[int, float]:
     """Identical logic to training/finetune.py::estimate_true_sr (first 60 s,
     95th percentile of per-frame 0.99 rolloff, doubled, capped at 44100)."""
     seg = y[: int(EST_LOAD_SEC * sr)] if len(y) > int(EST_LOAD_SEC * sr) else y
-    rolloff_frames = librosa.feature.spectral_rolloff(y=seg, sr=sr, roll_percent=0.99)
+    rolloff_frames = librosa.feature.spectral_rolloff(y=seg, sr=sr, roll_percent=0.99, n_fft=2048, hop_length=2048)
     rolloff = float(np.percentile(rolloff_frames, 95))
     return int(min(2 * rolloff, 44100)), rolloff
 
