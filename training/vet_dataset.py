@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
 """
-Vet a folder of audio files for genuine full-spectrum content before adding
-them to the A2SB fine-tuning dataset.
+Vet a container folder of audio sub-directories for genuine full-spectrum
+content before adding them to the A2SB fine-tuning dataset.
 
-For each file it reports:
+The script walks the given root recursively.  For every sub-directory that
+directly contains at least one audio file it:
+  1. Analyses each audio file in that directory.
+  2. Writes a report.csv (name configurable via --report-name) into that
+     directory so the results stay with the material.
+  3. Prints a per-folder summary block to stdout.
+
+At the end a grand-total summary is printed.
+
+Per-file columns in each report.csv:
   est_true_sr : the SAME value training/finetune.py::estimate_true_sr computes
                 (2x the 95th-percentile spectral rolloff, capped at 44100).
                 Files below 32000 are dropped by the apply_sr_loss_mask filter
@@ -49,9 +58,19 @@ REJECT_HZ = 17000      # below this -> REJECT
 PASS_HZ = 20500        # at/above this -> PASS
 
 
-def find_audio(folder: Path) -> list[Path]:
+def find_audio_dirs(root: Path) -> list[Path]:
+    """Return every directory under *root* that directly contains audio files."""
+    dirs: set[Path] = set()
+    for p in root.rglob("*"):
+        if p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS:
+            dirs.add(p.parent)
+    return sorted(dirs)
+
+
+def find_audio_in_dir(folder: Path) -> list[Path]:
+    """Return audio files that live directly inside *folder* (non-recursive)."""
     return sorted(
-        p for p in folder.rglob("*")
+        p for p in folder.iterdir()
         if p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS
     )
 
@@ -123,12 +142,91 @@ def analyze(path: Path, np, librosa) -> dict:
     }
 
 
+CSV_FIELDS = [
+    "file", "native_sr", "est_true_sr", "rolloff95",
+    "hf_edge", "shelf", "trainer_gate", "verdict",
+]
+
+
+def process_folder(
+    folder: Path,
+    report_name: str,
+    np,
+    librosa,
+) -> dict[str, int]:
+    """Analyse all audio files directly inside *folder*, write a report CSV there,
+    and return a counts dict for grand-total accumulation."""
+    files = find_audio_in_dir(folder)
+    if not files:
+        return {"PASS": 0, "CHECK": 0, "REJECT": 0, "ERROR": 0, "total": 0}
+
+    name_w = min(60, max(len(p.name) for p in files))
+    header = (f"{'file':<{name_w}}  {'edge':>6}  {'roll95':>6}  "
+              f"{'est_sr':>6}  {'shelf':>5}  {'gate':>4}  verdict")
+
+    print(f"\n{'='*len(header)}")
+    print(f"  {folder}")
+    print(f"{'='*len(header)}")
+    print(header)
+    print("-" * len(header))
+
+    rows: list[dict] = []
+    counts: dict[str, int] = {"PASS": 0, "CHECK": 0, "REJECT": 0, "ERROR": 0}
+
+    for p in files:
+        try:
+            r = analyze(p, np, librosa)
+        except Exception as e:  # noqa: BLE001 - one bad file shouldn't stop the scan
+            counts["ERROR"] += 1
+            print(f"{p.name[:name_w]:<{name_w}}  {'--':>6}  {'--':>6}  "
+                  f"{'--':>6}  {'--':>5}  {'--':>4}  ERROR: {e}")
+            rows.append({
+                "file": p.name, "native_sr": "", "est_true_sr": "",
+                "rolloff95": "", "hf_edge": "", "shelf": "",
+                "trainer_gate": "", "verdict": f"ERROR: {e}",
+            })
+            continue
+        counts[r["verdict"]] += 1
+        print(f"{p.name[:name_w]:<{name_w}}  {r['hf_edge']:>6}  {r['rolloff95']:>6}  "
+              f"{r['est_true_sr']:>6}  {r['shelf']:>5}  {r['trainer_gate']:>4}  "
+              f"{r['verdict']}")
+        rows.append({**r, "file": p.name})
+
+    print("-" * len(header))
+    print(f"PASS {counts['PASS']}  |  CHECK {counts['CHECK']}  |  "
+          f"REJECT {counts['REJECT']}  |  ERROR {counts['ERROR']}  "
+          f"(of {len(files)} files)")
+
+    report_path = folder / report_name
+    with open(report_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+        w.writeheader()
+        w.writerows(rows)
+    print(f"  -> wrote {report_path}")
+
+    counts["total"] = len(files)
+    return counts
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Vet audio files for genuine full-spectrum content."
+        description=(
+            "Recursively vet audio sub-directories for genuine full-spectrum "
+            "content, leaving a report CSV in each folder that contains audio files."
+        )
     )
-    ap.add_argument("folder", type=Path, help="Directory to scan (recursive).")
-    ap.add_argument("--csv", type=Path, default=None, help="Optional CSV report path.")
+    ap.add_argument(
+        "root",
+        type=Path,
+        help="Container directory to walk. A report.csv is written into every "
+             "sub-directory (at any depth) that directly contains audio files.",
+    )
+    ap.add_argument(
+        "--report-name",
+        default="report.csv",
+        metavar="FILENAME",
+        help="Name of the CSV report written into each folder (default: report.csv).",
+    )
     args = ap.parse_args()
 
     try:
@@ -138,54 +236,32 @@ def main() -> int:
         print(f"ERROR: this script needs numpy + librosa ({e}).", file=sys.stderr)
         return 2
 
-    if not args.folder.is_dir():
-        print(f"ERROR: not a directory: {args.folder}", file=sys.stderr)
+    if not args.root.is_dir():
+        print(f"ERROR: not a directory: {args.root}", file=sys.stderr)
         return 2
 
-    files = find_audio(args.folder)
-    if not files:
-        print(f"No audio files found under {args.folder}", file=sys.stderr)
+    audio_dirs = find_audio_dirs(args.root)
+    if not audio_dirs:
+        print(f"No audio files found under {args.root}", file=sys.stderr)
         return 1
 
-    rows = []
-    name_w = min(60, max(len(p.name) for p in files))
-    header = (f"{'file':<{name_w}}  {'edge':>6}  {'roll95':>6}  "
-              f"{'est_sr':>6}  {'shelf':>5}  {'gate':>4}  verdict")
-    print(header)
-    print("-" * len(header))
+    print(f"Found {len(audio_dirs)} folder(s) with audio files under {args.root}")
 
-    counts = {"PASS": 0, "CHECK": 0, "REJECT": 0, "ERROR": 0}
-    for p in files:
-        try:
-            r = analyze(p, np, librosa)
-        except Exception as e:  # noqa: BLE001 - one bad file shouldn't stop the scan
-            counts["ERROR"] += 1
-            print(f"{p.name[:name_w]:<{name_w}}  {'--':>6}  {'--':>6}  "
-                  f"{'--':>6}  {'--':>5}  {'--':>4}  ERROR: {e}")
-            rows.append({"file": str(p), "native_sr": "", "est_true_sr": "",
-                         "rolloff95": "", "hf_edge": "", "shelf": "",
-                         "trainer_gate": "", "verdict": f"ERROR: {e}"})
-            continue
-        counts[r["verdict"]] += 1
-        print(f"{p.name[:name_w]:<{name_w}}  {r['hf_edge']:>6}  {r['rolloff95']:>6}  "
-              f"{r['est_true_sr']:>6}  {r['shelf']:>5}  {r['trainer_gate']:>4}  "
-              f"{r['verdict']}")
-        rows.append(r)
+    grand: dict[str, int] = {"PASS": 0, "CHECK": 0, "REJECT": 0, "ERROR": 0, "total": 0}
+    for folder in audio_dirs:
+        counts = process_folder(folder, args.report_name, np, librosa)
+        for key in grand:
+            grand[key] += counts.get(key, 0)
 
-    print("-" * len(header))
-    print(f"PASS {counts['PASS']}  |  CHECK {counts['CHECK']}  |  "
-          f"REJECT {counts['REJECT']}  |  ERROR {counts['ERROR']}  "
-          f"(of {len(files)} files)")
-
-    if args.csv:
-        with open(args.csv, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=[
-                "file", "native_sr", "est_true_sr", "rolloff95",
-                "hf_edge", "shelf", "trainer_gate", "verdict",
-            ])
-            w.writeheader()
-            w.writerows(rows)
-        print(f"Wrote {args.csv}")
+    print(f"\n{'='*60}")
+    print("GRAND TOTAL")
+    print(f"{'='*60}")
+    print(f"Folders scanned : {len(audio_dirs)}")
+    print(f"Files analysed  : {grand['total']}")
+    print(f"  PASS   {grand['PASS']}")
+    print(f"  CHECK  {grand['CHECK']}")
+    print(f"  REJECT {grand['REJECT']}")
+    print(f"  ERROR  {grand['ERROR']}")
 
     return 0
 
