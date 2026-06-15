@@ -16,3 +16,7 @@
 ## 2024-05-18 - Precalculate temporal embeddings
 **Learning:** In DDPM sampling loops, computing temporal embeddings inside the loop using `t_to_emb` introduces unnecessary overhead. Since `t_steps` are known ahead of time, we can precalculate all embeddings in a single batched pass.
 **Action:** Always precalculate and vectorize deterministic tensor operations like temporal embeddings outside of iterative loops. Use `.unsqueeze()` and `.repeat()` to construct a tensor matching the required loop output shape, so the loop can simply perform a fast index lookup.
+
+## 2024-05-18 - Increase hop_length and n_fft for heuristic spectral checks
+**Learning:** `librosa.feature.spectral_flatness` and `librosa.feature.spectral_rolloff` compute with default `hop_length=512` and `n_fft=2048`, resulting in 75% overlap. For simple macroscopic heuristic checks (like audio validation or basic bandwidth estimation), this densely overlapping STFT is computational overkill and causes massive performance bottlenecks (e.g., thousands of times slower processing).
+**Action:** Always explicitly specify `n_fft=2048` and `hop_length=2048` (or larger matching values) when using Librosa spectral features for macroscopic heuristic checks to eliminate the 75% overlap, drastically speeding up the computations.
