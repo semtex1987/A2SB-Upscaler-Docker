@@ -1,0 +1,3 @@
+## 2024-06-17 - Contextual Help over Global Instruction Blocks
+**Learning:** Using large global instruction blocks at the top of an application causes cognitive overload and users often skip reading them. Moving instructional text contextually to component `info` attributes improves focus and interface clarity.
+**Action:** Prefer contextual `info` attributes on form components instead of long global markdown instructions. For components lacking `info` support (like `gr.File`), simulate it using `gr.Markdown` with `elem_classes=["text-sm", "text-gray-500", "mb-1"]` immediately preceding the component.
