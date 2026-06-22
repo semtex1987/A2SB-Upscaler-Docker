@@ -20,3 +20,7 @@
 ## 2026-06-13 - Optimize librosa spectral feature extraction
 **Learning:** `librosa.feature.spectral_flatness` and `librosa.feature.spectral_rolloff` default to `hop_length=n_fft//4` (512 when `n_fft=2048`), producing 75% STFT frame overlap. For coarse heuristic checks that aggregate over time (mean, percentile), this overlap computes far more frames than needed.
 **Action:** Set `hop_length=n_fft` (e.g., `hop_length=2048`) to eliminate the overlap when using these features for macroscopic heuristic checks. Keep `n_fft` at its default 2048 — only `hop_length` needs to change. This yields ~4× fewer STFT frames and proportionally less compute, with no meaningful accuracy loss for mean/percentile aggregations.
+
+## 2026-06-22 - Lazy load audio segments with librosa
+**Learning:** When extracting short audio segments from large files for dataset generation, using `librosa.load` without `offset` and `duration` loads the entire file into memory before resampling and slicing. This creates a massive bottleneck (up to 10000x slower for large files).
+**Action:** Use `librosa.get_duration(path=audiopath)` to check bounds, then lazily fetch only the required frames by passing `offset` and `duration` to `librosa.load` *before* resampling. Request a slightly larger duration (e.g. +0.05s) to guarantee sufficient frames remain after resampling, then slice to the exact length.
