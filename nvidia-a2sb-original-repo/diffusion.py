@@ -55,10 +55,7 @@ def get_multidiffusion_vf(vf_model, x_t, t_emb, win_length=256, hop_length=128, 
 
         r_idx = l_idx + win_length
         counts[...,l_idx:r_idx]+=1
-        curr_x_t = x_t[...,l_idx:r_idx]
-        vf_out = vfields[hop_idx] #vf_model(curr_x_t, t_emb)
-
-        vf_t[...,l_idx:r_idx] += vf_out
+        vf_t[...,l_idx:r_idx] += vfields[hop_idx]
         l_idx += hop_length
 
     return vf_t / counts

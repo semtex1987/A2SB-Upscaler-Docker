@@ -20,3 +20,7 @@
 ## 2026-06-13 - Optimize librosa spectral feature extraction
 **Learning:** `librosa.feature.spectral_flatness` and `librosa.feature.spectral_rolloff` default to `hop_length=n_fft//4` (512 when `n_fft=2048`), producing 75% STFT frame overlap. For coarse heuristic checks that aggregate over time (mean, percentile), this overlap computes far more frames than needed.
 **Action:** Set `hop_length=n_fft` (e.g., `hop_length=2048`) to eliminate the overlap when using these features for macroscopic heuristic checks. Keep `n_fft` at its default 2048 — only `hop_length` needs to change. This yields ~4× fewer STFT frames and proportionally less compute, with no meaningful accuracy loss for mean/percentile aggregations.
+
+## 2024-05-18 - Avoid unused tensor slicing in inner loops
+**Learning:** In PyTorch, even if a sliced tensor (e.g. `curr_x_t = x_t[...,l_idx:r_idx]`) is not materialized into a new copy immediately, creating the view inside a tight inner loop (like in `get_multidiffusion_vf`) adds measurable Python overhead and allocations.
+**Action:** Remove dead code and unused intermediate slice assignments within high-frequency loops. Directly access arrays or pre-calculate them where possible.
