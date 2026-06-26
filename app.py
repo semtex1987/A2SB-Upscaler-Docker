@@ -125,7 +125,10 @@ def generate_comparison_plot(original_path, restored_path):
 def high_band_rms_db(path, cutoff_hz):
     """RMS level (dBFS-ish, ref=1.0 full scale) of content at/above cutoff_hz."""
     y, sr = librosa.load(path, sr=None)
-    spec = np.abs(librosa.stft(y, n_fft=2048, hop_length=512))
+    # ⚡ Bolt: Increase hop_length to n_fft to eliminate 75% overlap overhead
+    # since we aggregate over time with np.mean, overlap is redundant compute.
+    # window='boxcar' (rectangular) prevents Hann attenuation at 0% overlap.
+    spec = np.abs(librosa.stft(y, n_fft=2048, hop_length=2048, window='boxcar'))
     freqs = librosa.fft_frequencies(sr=sr, n_fft=2048)
     band = spec[freqs >= cutoff_hz, :]
     if band.size == 0:
