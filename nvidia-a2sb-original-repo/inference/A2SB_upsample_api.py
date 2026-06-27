@@ -70,7 +70,7 @@ def compute_rolloff_freq(audio_file, roll_percent=0.99):
     """Fallback if no explicit cutoff is provided."""
     y, sr = librosa.load(audio_file, sr=None)
     # ⚡ Bolt: Increase hop_length/n_fft to avoid default 75% overlap overhead
-    rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr, roll_percent=roll_percent, n_fft=2048, hop_length=2048)[0]
+    rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr, roll_percent=roll_percent, n_fft=2048, hop_length=2048, window='boxcar')[0]
     rolloff = int(np.mean(rolloff))
     print('Auto-detected 99 percent rolloff:', rolloff)
     return rolloff
