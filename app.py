@@ -219,7 +219,7 @@ def is_likely_corrupted_audio(path):
     try:
         y = samples.astype(np.float32) / max(peak, 1.0)
         # ⚡ Bolt: Increase hop_length/n_fft to avoid default 75% overlap overhead
-        flatness = librosa.feature.spectral_flatness(y=y, n_fft=2048, hop_length=2048)
+        flatness = librosa.feature.spectral_flatness(y=y, n_fft=2048, hop_length=2048, window="boxcar")
         mean_flatness = float(np.mean(flatness))
         if mean_flatness > 0.6:
             return True
