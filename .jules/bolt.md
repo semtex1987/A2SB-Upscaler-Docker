@@ -20,3 +20,7 @@
 ## 2026-06-13 - Optimize librosa spectral feature extraction
 **Learning:** `librosa.feature.spectral_flatness` and `librosa.feature.spectral_rolloff` default to `hop_length=n_fft//4` (512 when `n_fft=2048`), producing 75% STFT frame overlap. For coarse heuristic checks that aggregate over time (mean, percentile), this overlap computes far more frames than needed.
 **Action:** Set `hop_length=n_fft` (e.g., `hop_length=2048`) to eliminate the overlap when using these features for macroscopic heuristic checks. Keep `n_fft` at its default 2048 — only `hop_length` needs to change. This yields ~4× fewer STFT frames and proportionally less compute, with no meaningful accuracy loss for mean/percentile aggregations.
+
+## 2024-05-18 - Audio lazy-loading with fallback params
+**Learning:** `load_wav_to_torch` inside `datasets.py` can be called with `start_time=None` and `end_time=None`. When attempting to calculate segment durations using `end_time - start_time`, it can result in a `TypeError: unsupported operand type(s) for -: 'NoneType' and 'float'`.
+**Action:** When calculating audio segment durations, derive it from the class constants `self.segment_length / self.sampling_rate` instead of the potentially `None` arguments. Ensure a fallback for `start_time` (e.g., `0.0`) is set before computing valid load bounds.
