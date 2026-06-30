@@ -1,0 +1,3 @@
+## 2026-06-30 - Contextual Helper Text
+**Learning:** Moving large, global instruction blocks to localized, component-level helper text (using the `info` attribute or small `gr.Markdown` blocks) significantly improves user focus and interface clarity by reducing cognitive load and bringing context directly to the point of interaction.
+**Action:** Always prefer using the `info` attribute on Gradio components for helper text, and use `elem_classes=["text-sm", "text-gray-500", "mb-1"]` on a preceding `gr.Markdown` component for those that don't support it (like `gr.File`), instead of wall-of-text introductions.
