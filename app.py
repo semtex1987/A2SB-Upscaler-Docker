@@ -52,6 +52,10 @@ UI_BATCH_DEFAULT = min(max(UI_BATCH_DEFAULT, UI_BATCH_MIN), UI_BATCH_MAX)
 def _get_butter_sos(order, normal_cutoff):
     return butter(order, normal_cutoff, btype='low', analog=False, output='sos')
 
+@functools.lru_cache(maxsize=128)
+def _get_butter_highpass_sos(order, normal_cutoff):
+    return butter(order, normal_cutoff, btype='high', analog=False, output='sos')
+
 def butter_lowpass_filter(data, cutoff, fs, order=10):
     data_arr = np.asarray(data)
     nyq = 0.5 * fs
@@ -125,12 +129,16 @@ def generate_comparison_plot(original_path, restored_path):
 def high_band_rms_db(path, cutoff_hz):
     """RMS level (dBFS-ish, ref=1.0 full scale) of content at/above cutoff_hz."""
     y, sr = librosa.load(path, sr=None)
-    spec = np.abs(librosa.stft(y, n_fft=2048, hop_length=512))
-    freqs = librosa.fft_frequencies(sr=sr, n_fft=2048)
-    band = spec[freqs >= cutoff_hz, :]
-    if band.size == 0:
+    nyq = 0.5 * sr
+    normal_cutoff = cutoff_hz / nyq
+    if normal_cutoff >= 1:
         return -200.0
-    rms = float(np.sqrt(np.mean(band ** 2)))
+
+    # ⚡ Bolt: Replace expensive STFT with fast time-domain IIR filtering
+    sos = _get_butter_highpass_sos(10, normal_cutoff)
+    filtered_y = sosfilt(sos, y)
+
+    rms = float(np.sqrt(np.mean(filtered_y ** 2)))
     return 20.0 * np.log10(max(rms, 1e-10))
 
 # --- Inference Functions ---
