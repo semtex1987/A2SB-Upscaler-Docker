@@ -88,7 +88,8 @@ def hf_edge(y, sr, np, librosa) -> tuple[float, bool]:
     """Highest frequency above the file's own noise floor, and whether the
     spectrum cliffs there (brickwall = transcode signature)."""
     n_fft = 4096
-    spec = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=1024))
+    # ⚡ Bolt: Use hop_length=n_fft//2 (50% overlap) to speed up STFT for macroscopic mean magnitude safely
+    spec = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=n_fft // 2))
     mean_mag = spec.mean(axis=1)
     freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
     peak = float(mean_mag.max())
