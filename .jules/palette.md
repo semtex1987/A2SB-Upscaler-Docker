@@ -1,0 +1,3 @@
+## 2024-05-18 - Contextual Helper Text in Gradio
+**Learning:** Large, global `gr.Markdown` instruction blocks at the top of an app create cognitive overload and take users out of context. Gradio provides native `info` attributes for most inputs (like `gr.Slider` and `gr.Textbox`) that position helper text exactly where the user is making a decision. For components like `gr.File` that lack `info` support, a localized `gr.Markdown` with utility classes (e.g., `elem_classes=["text-sm", "text-gray-500", "mb-1"]`) successfully mimics this native visual hierarchy.
+**Action:** Prefer localized helper text using `info` attributes over global instructions to improve user focus and interface clarity.
