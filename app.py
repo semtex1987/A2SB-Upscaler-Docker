@@ -522,6 +522,10 @@ if __name__ == "__main__":
                     file_types=["audio"],
                     label="Upload Audio File(s)",
                 )
+                gr.Markdown(
+                    "Supported formats: WAV, FLAC, MP3, OGG, M4A",
+                    elem_classes=["text-sm", "text-gray-500", "mb-1"]
+                )
                 staged_paths = gr.Textbox(
                     label="Staged File Paths (Optional)",
                     placeholder="/app/inputs/*.wav\n/app/inputs/song_a.flac",
