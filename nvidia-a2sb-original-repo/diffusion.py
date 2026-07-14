@@ -55,8 +55,9 @@ def get_multidiffusion_vf(vf_model, x_t, t_emb, win_length=256, hop_length=128, 
 
         r_idx = l_idx + win_length
         counts[...,l_idx:r_idx]+=1
-        curr_x_t = x_t[...,l_idx:r_idx]
-        vf_out = vfields[hop_idx] #vf_model(curr_x_t, t_emb)
+
+        # ⚡ Bolt: Removed unused `curr_x_t` tensor slice allocation to reduce Python overhead
+        vf_out = vfields[hop_idx]
 
         vf_t[...,l_idx:r_idx] += vf_out
         l_idx += hop_length
