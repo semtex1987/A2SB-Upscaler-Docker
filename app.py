@@ -494,22 +494,6 @@ if __name__ == "__main__":
     custom_css = "body { background-color: #121212; color: white; }"
     with gr.Blocks() as demo:
         gr.Markdown("# NVIDIA A2SB Stereo Restorer")
-        gr.Markdown(
-            "Upload one or many audio files to restore them sequentially. "
-            "Lower batch size reduces VRAM usage at the cost of longer inference time. "
-            "For H100/H200, 16-32 is a good starting range. For bandwidth extension, "
-            "50-100 steps is usually the practical range."
-        )
-        gr.Markdown(
-            "Set the cutoff at or below where your source content degrades. "
-            "For MP3s, artifacts typically begin between 10–16 kHz depending on bitrate. "
-            "The results summary shows the high-band energy before and after restoration so you "
-            "can verify the model added content above the cutoff."
-        )
-        gr.Markdown(
-            "Optional: stage files directly on the pod (for example with runpodctl) and "
-            "enter paths like /app/inputs/*.wav below to bypass browser upload."
-        )
 
         restored_state = gr.State([])
         plot_state = gr.State([])
@@ -523,25 +507,28 @@ if __name__ == "__main__":
                     label="Upload Audio File(s)",
                 )
                 gr.Markdown(
-                    "Supported formats: WAV, FLAC, MP3, OGG, M4A",
+                    "Upload one or many audio files to restore them sequentially. Supported formats: WAV, FLAC, MP3, OGG, M4A",
                     elem_classes=["text-sm", "text-gray-500", "mb-1"]
                 )
                 staged_paths = gr.Textbox(
                     label="Staged File Paths (Optional)",
                     placeholder="/app/inputs/*.wav\n/app/inputs/song_a.flac",
                     lines=2,
+                    info="Stage files directly on the pod (e.g. with runpodctl) and enter paths here to bypass browser upload.",
                 )
                 list_staged_button = gr.Button("List Staged Files")
                 staged_preview = gr.Markdown("No staged files listed yet.")
-                steps = gr.Slider(minimum=10, maximum=200, value=50, step=10, label="Steps (Quality)")
+                steps = gr.Slider(
+                    minimum=10, maximum=200, value=50, step=10, label="Steps (Quality)",
+                    info="For bandwidth extension, 50-100 steps is usually the practical range."
+                )
                 cutoff_choice = gr.Number(
                     value=14000,
                     minimum=1000,
                     maximum=20000,
                     step=100,
                     label="Lowpass / Restoration Cutoff (Hz)",
-                    info="Set at or below where your source's content degrades. "
-                         "Release checkpoints are weak above ~12 kHz.",
+                    info="Set at or below where your source's content degrades. For MP3s, artifacts typically begin between 10-16 kHz depending on bitrate. Release checkpoints are weak above ~12 kHz.",
                 )
                 batch_size = gr.Slider(
                     minimum=UI_BATCH_MIN,
@@ -549,8 +536,13 @@ if __name__ == "__main__":
                     value=UI_BATCH_DEFAULT,
                     step=1,
                     label="Inference Batch Size",
+                    info="Lower reduces VRAM at the cost of time. For H100/H200, 16-32 is a good starting range.",
                 )
                 run_button = gr.Button("Process Batch", variant="primary")
+                gr.Markdown(
+                    "The results summary shows the high-band energy before and after restoration to verify added content above the cutoff.",
+                    elem_classes=["text-sm", "text-gray-500", "mb-1"]
+                )
                 summary = gr.Markdown("No files processed yet.")
                 download_files = gr.Files(label="Download Restored Result(s)")
 
