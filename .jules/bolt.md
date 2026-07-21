@@ -20,3 +20,7 @@
 ## 2026-06-13 - Optimize librosa spectral feature extraction
 **Learning:** `librosa.feature.spectral_flatness` and `librosa.feature.spectral_rolloff` default to `hop_length=n_fft//4` (512 when `n_fft=2048`), producing 75% STFT frame overlap. For coarse heuristic checks that aggregate over time (mean, percentile), this overlap computes far more frames than needed.
 **Action:** Set `hop_length=n_fft` (e.g., `hop_length=2048`) to eliminate the overlap when using these features for macroscopic heuristic checks. Keep `n_fft` at its default 2048 — only `hop_length` needs to change. This yields ~4× fewer STFT frames and proportionally less compute, with no meaningful accuracy loss for mean/percentile aggregations.
+
+## 2024-07-21 - Safely optimize macroscopic STFT aggregations
+**Learning:** When aggregating STFT data over time (e.g., bin-average RMS), reducing overlap to 0% (`hop_length=n_fft`) causes blind spots with a Hann window or severe spectral leakage with a boxcar window. Using a time-domain IIR filter instead changes the mathematical output entirely.
+**Action:** Use a 50% overlap (`hop_length=n_fft//2`) for a safe ~1.8x speedup without sacrificing signal integrity in macroscopic heuristic functions. Never apply this overlap reduction to STFTs used for visual features (like spectrogram plots), as it drastically degrades visual time resolution.
