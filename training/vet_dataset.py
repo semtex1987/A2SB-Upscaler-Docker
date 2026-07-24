@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Vet a container folder of audio sub-directories for genuine full-spectrum
-content before adding them to the A2SB fine-tuning dataset.
+Vet a container folder of audio sub-directories before adding them to the A2SB
+fine-tuning dataset.
 
 The script walks the given root recursively.  For every sub-directory that
 directly contains at least one audio file it:
@@ -12,28 +12,46 @@ directly contains at least one audio file it:
 
 At the end a grand-total summary is printed.
 
+WHAT THIS GATES ON (default = authenticity mode)
+------------------------------------------------
+The goal is NOT "loudest / brightest" -- it is "a genuine master, free of
+artificial-upscaling artifacts".  A bandwidth-extension model is poisoned by
+FAKE high-frequency content (lossy transcodes, CD upsampled to "hi-res", DSD
+noise-shaping hash), so those are what we reject.  Genuine material is kept
+whatever its natural bandwidth: an intimate folk record that honestly rolls off
+at 17 kHz is authentic and useful; a metal track upsampled from a 320k MP3 is
+not, even though it "reaches" 20 kHz.  How bright a keeper is (its hf_edge) is
+reported so you can BALANCE set composition -- it is not a gate.
+
 Per-file columns in each report.csv:
+  native_sr   : the file's real sample rate.
   est_true_sr : the SAME value training/finetune.py::estimate_true_sr computes
                 (2x the 95th-percentile spectral rolloff, capped at 44100).
                 Files below 32000 are dropped by the apply_sr_loss_mask filter
-                during training -- this column tells you what the trainer will do.
+                during training; trainer_gate reflects that.
   rolloff95   : the underlying 95th-percentile rolloff frequency (Hz).
-  hf_edge     : highest frequency carrying real energy (Hz), measured against
-                each file's own noise floor. This is what exposes lossy
-                transcodes wearing a .flac extension: a true master fades
-                toward ~21-22 kHz, a transcode shows a hard edge at 16/19/20 kHz.
-  shelf       : "Y" if there is a steep cliff at hf_edge (a drop of >40 dB over
-                <1 kHz) -- the signature of a brickwall lowpass, i.e. a transcode
-                or aggressively filtered master. A genuine recording fades.
-  verdict     : PASS  -> real energy to >=20.5 kHz; keep it.
-                CHECK -> edge between 17 and 20.5 kHz; eyeball the spectrogram.
-                         (gentle LPF on a genuine master vs a 320k transcode
-                         both land here -- the shelf flag helps you decide.)
-                REJECT-> edge below 17 kHz; band-limited, low value for training.
+  hf_edge     : highest frequency carrying real energy (Hz), measured from the
+                95th-PERCENTILE-over-time spectrum (not the mean).  The
+                percentile captures intermittent/transient HF -- pick attacks,
+                brushes, cymbals -- that a mean spectrum averages away, so sparse
+                acoustic material (bluegrass, fingerpicked folk) is judged
+                fairly instead of being wrongly called band-limited.
+  shelf       : "Y" if there is a brickwall cliff at hf_edge (a drop of >40 dB
+                over <1 kHz).  A genuine recording fades; a cliff is the
+                signature of an artificial lowpass.
+  trainer_gate: "keep" / "DROP" -- what the trainer's own 16 kHz gate will do.
+  verdict     : AUTHENTIC -> genuine master, no artificial-upscaling artifact.
+                            Keep.  (Check hf_edge to balance bright vs mellow.)
+                ARTIFACT  -> brickwall cliff with a dead band below Nyquist:
+                            lossy transcode or CD-to-hi-res upsample.  Discard.
+                CHECK     -> ambiguous: e.g. a very high sample rate that may be
+                            DSD-sourced (downsample and re-vet), or a borderline
+                            case worth a spectrogram eyeball.
+  note        : short human-readable reason for the verdict.
 
-The verdict bar is intentionally STRICTER than the trainer's 16 kHz gate: the
-goal here is to keep only genuinely full-spectrum material, not merely whatever
-survives the loss mask.
+Pass --strict to restore the older bandwidth-threshold verdict instead
+(PASS >=20.5 kHz / CHECK 17-20.5 kHz / REJECT <17 kHz), applied to the improved
+hf_edge.  Useful when you deliberately want only the brightest material.
 
 NOTE: numpy + librosa must be installed where you RUN this. It is meant for your
 audio-staging machine. The trainer container already has these deps, so you can
@@ -47,6 +65,7 @@ from __future__ import annotations
 import argparse
 import csv
 import sys
+from collections import Counter
 from pathlib import Path
 
 AUDIO_EXTENSIONS = {".wav", ".flac", ".mp3", ".ogg", ".m4a", ".aiff", ".aif"}
@@ -54,6 +73,14 @@ AUDIO_EXTENSIONS = {".wav", ".flac", ".mp3", ".ogg", ".m4a", ".aiff", ".aif"}
 GATE_HZ = 32000        # matches apply_sr_loss_mask exclusion in finetune.py
 EST_LOAD_SEC = 60.0    # matches estimate_true_sr() window in finetune.py
 ANALYSIS_SEC = 180.0   # window for the hf-edge spectral scan
+
+# --- authenticity-mode thresholds -----------------------------------------
+SHELF_DROP_DB = 40.0   # a drop steeper than this over ~1 kHz counts as a cliff
+DEAD_BAND_HZ = 2000    # a cliff this far below Nyquist means an artificial LPF
+HIRATE_HZ = 96000      # above this, ultrasonic band may be DSD hash -> CHECK
+UPSAMPLE_CUTOFF_HZ = 24000  # a cliff at/under this in a >48 kHz file = upsample
+
+# --- strict-mode (legacy) thresholds --------------------------------------
 REJECT_HZ = 17000      # below this -> REJECT
 PASS_HZ = 20500        # at/above this -> PASS
 
@@ -85,24 +112,29 @@ def estimate_true_sr(y, sr, np, librosa) -> tuple[int, float]:
     return int(min(2 * rolloff, 44100)), rolloff
 
 
-def hf_edge(y, sr, np, librosa) -> tuple[float, bool]:
-    """Highest frequency above the file's own noise floor, and whether the
-    spectrum cliffs there (brickwall = transcode signature)."""
+def spectral_scan(y, sr, np, librosa) -> tuple[float, bool]:
+    """Highest frequency carrying real energy, and whether the spectrum cliffs
+    there (brickwall = artificial-lowpass signature).
+
+    The edge is taken from the 95th-PERCENTILE-over-time spectrum rather than the
+    mean: transient HF (pick attacks, brushes, cymbals) is intermittent and a
+    mean spectrum averages it below the noise floor, which unfairly rejects
+    sparse acoustic material.  The percentile keeps that energy visible.
+    """
     n_fft = 4096
     spec = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=1024))
-    mean_mag = spec.mean(axis=1)
+    p95 = np.percentile(spec, 95, axis=1)
     freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
-    peak = float(mean_mag.max())
+    peak = float(p95.max())
     if peak <= 0:
         return 0.0, False
-    mean_db = 20.0 * np.log10(np.maximum(mean_mag / peak, 1e-12))
+    p95_db = 20.0 * np.log10(np.maximum(p95 / peak, 1e-12))
 
-    # Adaptive floor: the file's own quietest bins. For a transcode the dead
-    # region above the cutoff sits at this floor; for a genuine file, HF energy
-    # stays above it up toward Nyquist. This avoids wrongly rejecting mellow-but-
-    # full-bandwidth recordings whose HF is quiet but present.
-    floor = float(np.percentile(mean_db, 10))
-    above = np.where(mean_db > floor + 6.0)[0]
+    # Adaptive floor: the file's own quietest bins. Above an artificial cutoff
+    # the dead region sits at this floor; in a genuine file HF energy stays above
+    # it toward Nyquist.
+    floor = float(np.percentile(p95_db, 10))
+    above = np.where(p95_db > floor + 6.0)[0]
     if len(above) == 0:
         return 0.0, False
     edge_bin = int(above.max())
@@ -112,25 +144,80 @@ def hf_edge(y, sr, np, librosa) -> tuple[float, bool]:
     bin_width = sr / n_fft
     look = max(1, int(round(500.0 / bin_width)))  # ~500 Hz each side
     lo = max(0, edge_bin - look)
-    hi = min(len(mean_db) - 1, edge_bin + look)
-    drop = float(mean_db[lo] - mean_db[hi])
-    return edge_hz, drop > 40.0
+    hi = min(len(p95_db) - 1, edge_bin + look)
+    drop = float(p95_db[lo] - p95_db[hi])
+    return edge_hz, drop > SHELF_DROP_DB
 
 
-def verdict(edge_hz: float) -> str:
-    if edge_hz < REJECT_HZ:
-        return "REJECT"
-    if edge_hz >= PASS_HZ:
-        return "PASS"
-    return "CHECK"
+def classify(sr, est_sr, edge_hz, shelf, strict) -> tuple[str, str]:
+    """Return (verdict, note).
+
+    strict=True   -> legacy bandwidth thresholds on hf_edge.
+    strict=False  -> authenticity mode: reject artificial-upscaling artifacts,
+                     keep genuine masters at whatever bandwidth the genre has.
+    """
+    if strict:
+        if edge_hz >= PASS_HZ:
+            return "PASS", ""
+        if edge_hz >= REJECT_HZ:
+            return "CHECK", ""
+        return "REJECT", ""
+
+    nyq = sr / 2.0
+
+    # 1) Very high sample rate: the ultrasonic band may be DSD noise-shaping hash
+    #    masquerading as content. Can't be trusted until decimated to PCM.
+    if sr > HIRATE_HZ:
+        return "CHECK", f"high-rate {int(sr/1000)}k: downsample (DSD-hash risk) & re-vet"
+
+    # 2) Brickwall cliff with a real dead band below Nyquist = artificial lowpass
+    #    (lossy transcode, or a lower-rate master upsampled to a higher rate).
+    if shelf and (nyq - edge_hz) > DEAD_BAND_HZ:
+        if sr > 48000 and edge_hz <= UPSAMPLE_CUTOFF_HZ:
+            kind = "upsample"
+        else:
+            kind = "transcode"
+        return "ARTIFACT", (
+            f"{kind}-cliff@{edge_hz/1000:.1f}k (dead band {(nyq - edge_hz)/1000:.0f}k)"
+        )
+
+    # 3) Genuine gradual fade -> authentic to the genre, keep it.
+    note = f"clean fade to {edge_hz/1000:.1f}k"
+    if est_sr < GATE_HZ:
+        note += "; trainer-drops"
+    return "AUTHENTIC", note
 
 
-def analyze(path: Path, np, librosa) -> dict:
+def probe_sr(path: Path):
+    """Read the sample rate from the header without decoding audio.
+    Returns an int, or None if it can't be determined cheaply."""
+    try:
+        import soundfile as sf
+        return int(sf.info(str(path)).samplerate)
+    except Exception:  # noqa: BLE001 - fall back to the full decode path
+        return None
+
+
+def analyze(path: Path, np, librosa, strict: bool) -> dict:
+    # Short-circuit DSD-rate material: at these rates the ultrasonic band is
+    # almost certainly noise-shaping hash, the verdict is CHECK regardless, and a
+    # full-length STFT at 352.8 kHz is painfully slow -- so skip the decode.
+    if not strict:
+        sr0 = probe_sr(path)
+        if sr0 is not None and sr0 > HIRATE_HZ:
+            return {
+                "file": str(path), "native_sr": sr0, "est_true_sr": "",
+                "rolloff95": "", "hf_edge": "", "shelf": "", "trainer_gate": "",
+                "verdict": "CHECK",
+                "note": f"high-rate {int(sr0/1000)}k: downsample (DSD-hash risk) & re-vet",
+            }
+
     y, sr = librosa.load(str(path), sr=None, mono=True, duration=ANALYSIS_SEC)
     if y.size == 0:
         raise ValueError("empty / unreadable audio")
     est_sr, rolloff = estimate_true_sr(y, sr, np, librosa)
-    edge_hz, shelf = hf_edge(y, sr, np, librosa)
+    edge_hz, shelf = spectral_scan(y, sr, np, librosa)
+    v, note = classify(sr, est_sr, edge_hz, shelf, strict)
     return {
         "file": str(path),
         "native_sr": sr,
@@ -139,31 +226,34 @@ def analyze(path: Path, np, librosa) -> dict:
         "hf_edge": int(edge_hz),
         "shelf": "Y" if shelf else "N",
         "trainer_gate": "keep" if est_sr >= GATE_HZ else "DROP",
-        "verdict": verdict(edge_hz),
+        "verdict": v,
+        "note": note,
     }
 
 
 CSV_FIELDS = [
     "file", "native_sr", "est_true_sr", "rolloff95",
-    "hf_edge", "shelf", "trainer_gate", "verdict",
+    "hf_edge", "shelf", "trainer_gate", "verdict", "note",
 ]
 
 
 def process_folder(
     folder: Path,
     report_name: str,
+    strict: bool,
     np,
     librosa,
-) -> dict[str, int]:
+) -> Counter:
     """Analyse all audio files directly inside *folder*, write a report CSV there,
-    and return a counts dict for grand-total accumulation."""
+    and return a Counter of verdicts (plus 'total') for grand-total accumulation."""
+    counts: Counter = Counter()
     files = find_audio_in_dir(folder)
     if not files:
-        return {"PASS": 0, "CHECK": 0, "REJECT": 0, "ERROR": 0, "total": 0}
+        return counts
 
-    name_w = min(60, max(len(p.name) for p in files))
+    name_w = min(50, max(len(p.name) for p in files))
     header = (f"{'file':<{name_w}}  {'edge':>6}  {'roll95':>6}  "
-              f"{'est_sr':>6}  {'shelf':>5}  {'gate':>4}  verdict")
+              f"{'est_sr':>6}  {'shelf':>5}  {'gate':>4}  {'verdict':<9}  note")
 
     print(f"\n{'='*len(header)}")
     print(f"  {folder}")
@@ -172,48 +262,60 @@ def process_folder(
     print("-" * len(header))
 
     rows: list[dict] = []
-    counts: dict[str, int] = {"PASS": 0, "CHECK": 0, "REJECT": 0, "ERROR": 0}
 
     for p in files:
         try:
-            r = analyze(p, np, librosa)
+            r = analyze(p, np, librosa, strict)
         except Exception as e:  # noqa: BLE001 - one bad file shouldn't stop the scan
             counts["ERROR"] += 1
             print(f"{p.name[:name_w]:<{name_w}}  {'--':>6}  {'--':>6}  "
-                  f"{'--':>6}  {'--':>5}  {'--':>4}  ERROR: {e}")
+                  f"{'--':>6}  {'--':>5}  {'--':>4}  {'ERROR':<9}  {e}")
             rows.append({
                 "file": p.name, "native_sr": "", "est_true_sr": "",
                 "rolloff95": "", "hf_edge": "", "shelf": "",
-                "trainer_gate": "", "verdict": f"ERROR: {e}",
+                "trainer_gate": "", "verdict": "ERROR", "note": str(e),
             })
             continue
         counts[r["verdict"]] += 1
         print(f"{p.name[:name_w]:<{name_w}}  {r['hf_edge']:>6}  {r['rolloff95']:>6}  "
               f"{r['est_true_sr']:>6}  {r['shelf']:>5}  {r['trainer_gate']:>4}  "
-              f"{r['verdict']}")
+              f"{r['verdict']:<9}  {r['note'][:34]}")
         rows.append({**r, "file": p.name})
 
     print("-" * len(header))
-    print(f"PASS {counts['PASS']}  |  CHECK {counts['CHECK']}  |  "
-          f"REJECT {counts['REJECT']}  |  ERROR {counts['ERROR']}  "
-          f"(of {len(files)} files)")
+    print("  |  ".join(f"{k} {counts[k]}" for k in _verdict_order(counts))
+          + f"  (of {len(files)} files)")
 
     report_path = folder / report_name
-    with open(report_path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
-        w.writeheader()
-        w.writerows(rows)
-    print(f"  -> wrote {report_path}")
+    try:
+        with open(report_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+            w.writeheader()
+            w.writerows(rows)
+        print(f"  -> wrote {report_path}")
+    except OSError as e:
+        # A network share can blip mid-run; don't lose the whole scan over one
+        # folder we couldn't write. Report it and carry on.
+        print(f"  !! could not write {report_path}: {e}", file=sys.stderr)
 
     counts["total"] = len(files)
     return counts
 
 
+def _verdict_order(counts: Counter) -> list[str]:
+    """Stable, human-friendly ordering of whatever verdict labels are present."""
+    preferred = ["AUTHENTIC", "PASS", "CHECK", "ARTIFACT", "REJECT", "ERROR"]
+    present = [k for k in preferred if k in counts and k != "total"]
+    extra = [k for k in counts if k not in preferred and k != "total"]
+    return present + sorted(extra)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=(
-            "Recursively vet audio sub-directories for genuine full-spectrum "
-            "content, leaving a report CSV in each folder that contains audio files."
+            "Recursively vet audio sub-directories for authentic, "
+            "artifact-free content, leaving a report CSV in each folder that "
+            "contains audio files."
         )
     )
     ap.add_argument(
@@ -227,6 +329,13 @@ def main() -> int:
         default="report.csv",
         metavar="FILENAME",
         help="Name of the CSV report written into each folder (default: report.csv).",
+    )
+    ap.add_argument(
+        "--strict",
+        action="store_true",
+        help="Use the legacy bandwidth-threshold verdict (PASS >=20.5 kHz / "
+             "CHECK 17-20.5 kHz / REJECT <17 kHz) instead of authenticity mode. "
+             "Keeps only the brightest material.",
     )
     args = ap.parse_args()
 
@@ -246,23 +355,22 @@ def main() -> int:
         print(f"No audio files found under {args.root}", file=sys.stderr)
         return 1
 
+    mode = "strict bandwidth" if args.strict else "authenticity"
     print(f"Found {len(audio_dirs)} folder(s) with audio files under {args.root}")
+    print(f"Mode: {mode}")
 
-    grand: dict[str, int] = {"PASS": 0, "CHECK": 0, "REJECT": 0, "ERROR": 0, "total": 0}
+    grand: Counter = Counter()
     for folder in audio_dirs:
-        counts = process_folder(folder, args.report_name, np, librosa)
-        for key in grand:
-            grand[key] += counts.get(key, 0)
+        counts = process_folder(folder, args.report_name, args.strict, np, librosa)
+        grand.update(counts)
 
     print(f"\n{'='*60}")
     print("GRAND TOTAL")
     print(f"{'='*60}")
     print(f"Folders scanned : {len(audio_dirs)}")
-    print(f"Files analysed  : {grand['total']}")
-    print(f"  PASS   {grand['PASS']}")
-    print(f"  CHECK  {grand['CHECK']}")
-    print(f"  REJECT {grand['REJECT']}")
-    print(f"  ERROR  {grand['ERROR']}")
+    print(f"Files analysed  : {grand.get('total', 0)}")
+    for k in _verdict_order(grand):
+        print(f"  {k:<10} {grand[k]}")
 
     return 0
 
