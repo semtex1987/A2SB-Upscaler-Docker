@@ -39,7 +39,6 @@ trainer:
   barebones: false
   sync_batchnorm: false
   reload_dataloaders_every_n_epochs: 0
-  default_root_dir: /data/training_output/split_0.5_1.0
 
 model:
   train_t_min: 0.5

@@ -174,7 +174,11 @@ def run_fit(
         "-c", str(config_path),
         "--ckpt_path", str(ckpt_path),
         "--trainer.max_steps", str(max_steps),
-        "--trainer.default_root_dir", str(output_dir),
+        # main.py does link_arguments("checkpoint_callback.dirpath",
+        # "trainer.default_root_dir"), so default_root_dir is DERIVED and must
+        # never be passed directly -- jsonargparse rejects setting a link target.
+        # Setting dirpath drives both.
+        "--checkpoint_callback.dirpath", str(output_dir),
         "--data.batch_size", str(batch_size),
     ]
     if learning_rate is not None:
@@ -286,6 +290,38 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # 0) Preflight: fail fast with an actionable message rather than letting a
+    # missing framework/checkpoint surface later as an opaque Lightning error.
+    problems: list[str] = []
+    if not MAIN_PY.is_file():
+        problems.append(
+            f"A2SB main.py not found at {MAIN_PY}\n"
+            f"    Set A2SB_APP_ROOT to the directory containing main.py "
+            f"(the contents of nvidia-a2sb-original-repo/)."
+        )
+    needed = []
+    if args.splits in ("both", "0.0-0.5"):
+        needed.append(CKPT_SPLIT_1)
+    if args.splits in ("both", "0.5-1.0"):
+        needed.append(CKPT_SPLIT_2)
+    missing = [c for c in needed if not Path(c).is_file()]
+    if missing:
+        problems.append(
+            "release checkpoint(s) not found:\n"
+            + "".join(f"      {c}\n" for c in missing)
+            + f"    Set A2SB_CKPT_DIR (currently {CKPT_DIR}) or download them, e.g.:\n"
+            f"      mkdir -p {CKPT_DIR} && wget -P {CKPT_DIR} \\\n"
+            f"        https://huggingface.co/nvidia/audio_to_audio_schrodinger_bridge/"
+            f"resolve/main/ckpt/A2SB_twosplit_0.0_0.5_release.ckpt \\\n"
+            f"        https://huggingface.co/nvidia/audio_to_audio_schrodinger_bridge/"
+            f"resolve/main/ckpt/A2SB_twosplit_0.5_1.0_release.ckpt"
+        )
+    if problems:
+        raise SystemExit(
+            "ERROR: cannot start fine-tuning:\n"
+            + "\n".join(f"  - {p}" for p in problems)
+        )
+
     # 1) Build manifest
     manifest_path, n_train_segments = build_manifest(
         args.data_dir,
@@ -323,7 +359,7 @@ def main() -> int:
             max_steps=effective_max,
             batch_size=args.batch_size,
             learning_rate=args.learning_rate,
-            extra_args=common_override + ["--checkpoint_callback.dirpath", str(out1)] + args.extra,
+            extra_args=common_override + args.extra,
         )
 
     if args.splits in ("both", "0.5-1.0"):
@@ -338,7 +374,7 @@ def main() -> int:
             max_steps=effective_max,
             batch_size=args.batch_size,
             learning_rate=args.learning_rate,
-            extra_args=common_override + ["--checkpoint_callback.dirpath", str(out2)] + args.extra,
+            extra_args=common_override + args.extra,
         )
 
     # 3) Copy latest checkpoints to a single folder for inference
