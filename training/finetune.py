@@ -368,7 +368,9 @@ def main() -> int:
     parser.add_argument(
         "extra",
         nargs="*",
-        help="Extra args passed to Lightning (e.g. --trainer.precision bf16-mixed)",
+        help="Extra args passed through to Lightning. These are positional, so "
+             "separate them with a bare '--' or argparse treats them as unknown "
+             "options: finetune.py --steps 5000 -- --trainer.precision bf16-mixed",
     )
     args = parser.parse_args()
 
