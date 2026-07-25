@@ -157,6 +157,44 @@ def build_manifest(
     return manifest_path, n_train_segments
 
 
+def write_data_override(
+    config_path: Path,
+    dest: Path,
+    root_folder: str,
+    manifest_filename: str,
+) -> Path:
+    """Write a small config that points the datamodule at our manifest.
+
+    mix_dataset_config is an un-annotated dict parameter, and overriding a nested
+    key through CLI dot-notation (--data.mix_dataset_config.CURATED.root_folder)
+    makes jsonargparse hand the datamodule tuples instead of dicts:
+
+        TypeError: tuple indices must be integers or slices, not str
+
+    Supplying the whole mapping via an extra -c config uses the same code path
+    that already parses the base config correctly, so the structure survives.
+    Each dataset entry is copied from the base config with only the manifest
+    location patched, preserving flags like apply_sr_loss_mask.
+    """
+    import yaml
+
+    base = yaml.safe_load(open(config_path, encoding="utf-8"))
+    mdc = (base.get("data") or {}).get("mix_dataset_config") or {}
+    patched = {}
+    for name, entry in mdc.items():
+        entry = dict(entry or {})
+        entry["root_folder"] = root_folder
+        entry["filename"] = manifest_filename
+        patched[name] = entry
+    if not patched:
+        raise SystemExit(f"No data.mix_dataset_config found in {config_path}")
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest, "w", encoding="utf-8") as f:
+        yaml.safe_dump({"data": {"mix_dataset_config": patched}}, f, sort_keys=False)
+    return dest
+
+
 def run_fit(
     config_path: Path,
     ckpt_path: Path,
@@ -165,6 +203,7 @@ def run_fit(
     batch_size: int,
     learning_rate: float | None,
     extra_args: list[str],
+    data_override: Path | None = None,
 ) -> None:
     """Run main.py fit with the given config and checkpoint."""
     cmd = [
@@ -172,6 +211,11 @@ def run_fit(
         str(MAIN_PY),
         "fit",
         "-c", str(config_path),
+    ]
+    # Merged after the base config, so it wins.
+    if data_override is not None:
+        cmd += ["-c", str(data_override)]
+    cmd += [
         "--ckpt_path", str(ckpt_path),
         "--trainer.max_steps", str(max_steps),
         # main.py does link_arguments("checkpoint_callback.dirpath",
@@ -340,8 +384,6 @@ def main() -> int:
     val_interval = min(1000, batches_per_epoch)
 
     common_override = [
-        "--data.mix_dataset_config.CURATED.root_folder", root_folder,
-        "--data.mix_dataset_config.CURATED.filename", manifest_filename,
         "--model.learning_rate", str(args.learning_rate),
         "--trainer.val_check_interval", str(val_interval),
     ]
@@ -360,6 +402,10 @@ def main() -> int:
             batch_size=args.batch_size,
             learning_rate=args.learning_rate,
             extra_args=common_override + args.extra,
+            data_override=write_data_override(
+                CONFIG_SPLIT_1, out1 / "data_override.yaml",
+                root_folder, manifest_filename,
+            ),
         )
 
     if args.splits in ("both", "0.5-1.0"):
@@ -375,6 +421,10 @@ def main() -> int:
             batch_size=args.batch_size,
             learning_rate=args.learning_rate,
             extra_args=common_override + args.extra,
+            data_override=write_data_override(
+                CONFIG_SPLIT_2, out2 / "data_override.yaml",
+                root_folder, manifest_filename,
+            ),
         )
 
     # 3) Copy latest checkpoints to a single folder for inference
