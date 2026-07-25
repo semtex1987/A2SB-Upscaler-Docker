@@ -421,8 +421,8 @@ def main() -> int:
     batches_per_epoch = max(1, n_train_segments // args.batch_size)
     val_interval = min(1000, batches_per_epoch)
 
+    # learning_rate is passed by run_fit itself; don't duplicate it here.
     common_override = [
-        "--model.learning_rate", str(args.learning_rate),
         "--trainer.val_check_interval", str(val_interval),
     ]
 

@@ -43,7 +43,7 @@ RUN wget -O ckpts/A2SB_twosplit_0.0_0.5_release.ckpt https://huggingface.co/nvid
 
 ENV CUDA_VISIBLE_DEVICES=0 \
     MKL_THREADING_LAYER=GNU \
-    PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,max_split_size_mb:512"
+    PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 
 RUN mkdir -p /app/training/configs /data/training_data /data/training_output /debug
 

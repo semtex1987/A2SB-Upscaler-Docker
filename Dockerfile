@@ -72,7 +72,7 @@ ENV CUDA_VISIBLE_DEVICES=0 \
     SLURM_LOCALID=0 \
     SLURM_JOB_ID=1 \
     SLURM_NTASKS=1 \
-    PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,max_split_size_mb:512"
+    PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 
 # 8. Create a non-root user and setup directories
 #    /debug is used by Lightning's CSVLogger as default_root_dir

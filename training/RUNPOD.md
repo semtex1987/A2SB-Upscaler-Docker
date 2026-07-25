@@ -83,6 +83,16 @@ export A2SB_APP_ROOT=/app          # dir holding main.py
 export A2SB_CKPT_DIR=/workspace/ckpts   # dir holding the release .ckpt files
 ```
 
+If you set `PYTORCH_CUDA_ALLOC_CONF` yourself, use `expandable_segments:True`
+**alone**. Combining it with `max_split_size_mb` mixes two incompatible
+allocation strategies (expandable segments cannot be split) and crashes a few
+steps into training with:
+
+```
+RuntimeError: !block->expandable_segment_ INTERNAL ASSERT FAILED at
+"../c10/cuda/CUDACachingAllocator.cpp", please report a bug to PyTorch.
+```
+
 To iterate: edit locally, push, then `git pull` in
 `/workspace/A2SB-Upscaler-Docker` on the pod and re-run. No image rebuild.
 
