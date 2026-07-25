@@ -47,6 +47,10 @@ ENV CUDA_VISIBLE_DEVICES=0 \
 
 RUN mkdir -p /app/training/configs /data/training_data /data/training_output /debug
 
+# Bake in the whole training folder so the image matches the repo. This is only a
+# convenience default -- the code here changes far more often than the multi-GB
+# checkpoints above, so prefer cloning the repo onto the pod and running that
+# copy (see training/RUNPOD.md) instead of rebuilding this image per edit.
 COPY training/ /app/training/
 
 WORKDIR /app

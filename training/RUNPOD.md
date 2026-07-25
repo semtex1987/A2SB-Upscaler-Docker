@@ -5,6 +5,23 @@ can't carry it and `.gitignore` deliberately excludes `training_data/`. So the
 flow is: pull the repo on the pod, ship the audio separately, point the trainer
 at it.
 
+## Don't rebuild the image to change code
+
+The training image is large because it bakes in the A2SB framework and the three
+multi-GB release checkpoints — none of which change when you edit a script. So
+treat the image as a **fixed runtime** and get the code from git instead:
+
+- `finetune.py` resolves its configs **next to itself**, so a cloned checkout
+  uses its own `training/configs/*.yaml`.
+- It finds the baked-in framework and weights through `A2SB_APP_ROOT`
+  (default `/app`) and `A2SB_CKPT_DIR` (default `/app/ckpts`).
+
+Net effect: `git pull` on the pod is enough to pick up code changes. Rebuild the
+image only when the *dependencies or checkpoints* change.
+
+(The image still contains a copy of `training/` as a working default — the
+cloned copy simply takes precedence when you run it directly.)
+
 ## The first-run dataset
 
 `training/first_run_dataset.csv` is the manifest of the curated first-run set:
@@ -45,14 +62,11 @@ sub-folders — the trainer scans recursively).
 
 ## 3. Launch fine-tuning
 
-The training container (`training/Dockerfile.train`) is self-contained: it
-installs the deps and downloads the three A2SB release checkpoints. On a RunPod
-pod that already has the NVIDIA runtime you can either build/run that image, or
-run `finetune.py` directly in a PyTorch pod after installing the deps listed in
-`Dockerfile.train`.
+Run the **cloned** copy of the script inside the training container. It picks up
+its own configs and uses the framework + checkpoints baked into the image:
 
 ```bash
-python training/finetune.py \
+python /workspace/A2SB-Upscaler-Docker/training/finetune.py \
     --data-dir /workspace/training_data \
     --output-dir /workspace/training_output \
     --splits both \
@@ -60,6 +74,17 @@ python training/finetune.py \
     --batch-size 2 \
     --learning-rate 0.00005
 ```
+
+If the image's install lives somewhere other than `/app` (or you mounted the
+weights on a volume to keep the image small), point at it:
+
+```bash
+export A2SB_APP_ROOT=/app          # dir holding main.py
+export A2SB_CKPT_DIR=/workspace/ckpts   # dir holding the release .ckpt files
+```
+
+To iterate: edit locally, push, then `git pull` in
+`/workspace/A2SB-Upscaler-Docker` on the pod and re-run. No image rebuild.
 
 `finetune.py` builds its own manifest by scanning `--data-dir` (estimating each
 file's true sample rate and dropping anything under 16 kHz), fine-tunes the two

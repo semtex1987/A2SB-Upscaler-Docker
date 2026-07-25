@@ -21,16 +21,23 @@ MIN_DURATION_SEC = SEGMENT_LENGTH / SAMPLING_RATE
 
 AUDIO_EXTENSIONS = {".wav", ".flac", ".mp3", ".ogg", ".m4a"}
 
-# NVIDIA release checkpoints (inside container)
-CKPT_SPLIT_1 = "/app/ckpts/A2SB_twosplit_0.0_0.5_release.ckpt"
-CKPT_SPLIT_2 = "/app/ckpts/A2SB_twosplit_0.5_1.0_release.ckpt"
+# The heavy, rarely-changing parts (A2SB framework + release checkpoints) live in
+# the container image; the code you iterate on does not have to. APP_ROOT points
+# at the baked-in install and is overridable via A2SB_APP_ROOT, while the configs
+# are resolved next to THIS script -- so you can `git clone`/`git pull` the repo
+# onto a pod and run that copy directly, with no image rebuild.
+APP_ROOT = Path(os.environ.get("A2SB_APP_ROOT", "/app"))
+MAIN_PY = APP_ROOT / "main.py"
+CKPT_DIR = Path(os.environ.get("A2SB_CKPT_DIR", str(APP_ROOT / "ckpts")))
 
-# Config and script paths inside container
-APP_ROOT = Path("/app")
-TRAINING_DIR = APP_ROOT / "training"
+# NVIDIA release checkpoints
+CKPT_SPLIT_1 = str(CKPT_DIR / "A2SB_twosplit_0.0_0.5_release.ckpt")
+CKPT_SPLIT_2 = str(CKPT_DIR / "A2SB_twosplit_0.5_1.0_release.ckpt")
+
+# Configs travel with this script, so a cloned checkout uses its own.
+TRAINING_DIR = Path(__file__).resolve().parent
 CONFIG_SPLIT_1 = TRAINING_DIR / "configs" / "finetune_split1.yaml"
 CONFIG_SPLIT_2 = TRAINING_DIR / "configs" / "finetune_split2.yaml"
-MAIN_PY = APP_ROOT / "main.py"
 
 
 def get_duration(path: str) -> float | None:
