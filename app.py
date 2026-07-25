@@ -125,7 +125,11 @@ def generate_comparison_plot(original_path, restored_path):
 def high_band_rms_db(path, cutoff_hz):
     """RMS level (dBFS-ish, ref=1.0 full scale) of content at/above cutoff_hz."""
     y, sr = librosa.load(path, sr=None)
-    spec = np.abs(librosa.stft(y, n_fft=2048, hop_length=512))
+
+    # ⚡ Bolt: Optimize macroscopic STFT heuristic by reducing overlap to 50%.
+    # Using hop_length=1024 (n_fft//2) instead of 512 provides a ~2x speedup
+    # without sacrificing signal integrity or causing blind spots.
+    spec = np.abs(librosa.stft(y, n_fft=2048, hop_length=1024))
     freqs = librosa.fft_frequencies(sr=sr, n_fft=2048)
     band = spec[freqs >= cutoff_hz, :]
     if band.size == 0:
