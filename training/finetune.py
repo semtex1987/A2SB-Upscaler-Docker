@@ -244,17 +244,55 @@ def latest_ckpt_in_dir(d: Path) -> Path | None:
 
 
 def checkpoint_global_step(ckpt_path: Path) -> int:
-    """Release checkpoints are full Lightning checkpoints; fit(ckpt_path=...)
-    resumes their global_step, so trainer.max_steps must be offset by it or
-    training stops before a single step runs."""
+    """global_step recorded in a checkpoint. fit(ckpt_path=...) restores it, so
+    trainer.max_steps must be offset by it or training stops before a single
+    step runs."""
     try:
         import torch
-        ckpt = torch.load(str(ckpt_path), map_location="cpu")
+        ckpt = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
         return int(ckpt.get("global_step", 0))
     except Exception as e:
         print(f"  WARNING: could not read global_step from {ckpt_path}: {e}",
               file=sys.stderr)
         return 0
+
+
+def prepare_finetune_checkpoint(release_ckpt: Path, dest: Path) -> Path:
+    """Make a checkpoint that `fit --ckpt_path` will accept for FINE-TUNING.
+
+    The NVIDIA release checkpoints carry only the model:
+
+        KeyError: Trying to restore optimizer state but checkpoint contains only
+        the model. This is probably due to `ModelCheckpoint.save_weights_only`
+        being set to `True`.
+
+    Lightning's --ckpt_path means *resume*, so it demands optimizer_states and
+    lr_schedulers. Fine-tuning wants the opposite of a resume: pretrained
+    weights, but a fresh optimizer at the new learning rate. Writing empty
+    optimizer_states/lr_schedulers satisfies the restore path while leaving the
+    freshly-built optimizer and scheduler untouched (both restore loops zip over
+    the empty lists and do nothing). Loop counters are cleared too, so --steps
+    counts from zero rather than from the release checkpoint's global_step.
+
+    A checkpoint that already carries training state is returned untouched, so
+    resuming an interrupted fine-tune still works.
+    """
+    import torch
+
+    ckpt = torch.load(str(release_ckpt), map_location="cpu", weights_only=False)
+    if "optimizer_states" in ckpt and "lr_schedulers" in ckpt:
+        return release_ckpt
+
+    ckpt["optimizer_states"] = []
+    ckpt["lr_schedulers"] = []
+    ckpt.pop("loops", None)
+    ckpt["global_step"] = 0
+    ckpt["epoch"] = 0
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(ckpt, str(dest))
+    print(f"  prepared fine-tune start checkpoint -> {dest}")
+    return dest
 
 
 def copy_final_checkpoints(
@@ -390,13 +428,14 @@ def main() -> int:
 
     # 2) Fine-tune split(s)
     if args.splits in ("both", "0.0-0.5"):
-        resumed = checkpoint_global_step(Path(CKPT_SPLIT_1))
-        effective_max = resumed + args.steps
-        print(f"Split 0.0-0.5 resumes at global_step={resumed}; training until {effective_max}")
         out1 = args.output_dir / "split_0.0_0.5"
+        start1 = prepare_finetune_checkpoint(Path(CKPT_SPLIT_1), out1 / "finetune_start.ckpt")
+        resumed = checkpoint_global_step(start1)
+        effective_max = resumed + args.steps
+        print(f"Split 0.0-0.5 starts at global_step={resumed}; training until {effective_max}")
         run_fit(
             CONFIG_SPLIT_1,
-            Path(CKPT_SPLIT_1),
+            start1,
             out1,
             max_steps=effective_max,
             batch_size=args.batch_size,
@@ -409,13 +448,14 @@ def main() -> int:
         )
 
     if args.splits in ("both", "0.5-1.0"):
-        resumed = checkpoint_global_step(Path(CKPT_SPLIT_2))
-        effective_max = resumed + args.steps
-        print(f"Split 0.5-1.0 resumes at global_step={resumed}; training until {effective_max}")
         out2 = args.output_dir / "split_0.5_1.0"
+        start2 = prepare_finetune_checkpoint(Path(CKPT_SPLIT_2), out2 / "finetune_start.ckpt")
+        resumed = checkpoint_global_step(start2)
+        effective_max = resumed + args.steps
+        print(f"Split 0.5-1.0 starts at global_step={resumed}; training until {effective_max}")
         run_fit(
             CONFIG_SPLIT_2,
-            Path(CKPT_SPLIT_2),
+            start2,
             out2,
             max_steps=effective_max,
             batch_size=args.batch_size,
