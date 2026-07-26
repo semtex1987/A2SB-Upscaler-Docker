@@ -33,7 +33,7 @@ RUN pip install --no-cache-dir \
     einops \
     pytorch_lightning \
     lightning \
-    rotary_embedding_torch \
+    rotary_embedding_torch==0.9.1 \
     tqdm \
     gradio
 
