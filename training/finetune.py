@@ -258,6 +258,34 @@ def checkpoint_global_step(ckpt_path: Path) -> int:
         return 0
 
 
+def find_resume_checkpoint(split_dir: Path) -> Path | None:
+    """Newest usable training checkpoint in *split_dir*, or None.
+
+    Skips our own start checkpoint, and skips anything that fails to load: a
+    checkpoint written while the disk was filling up is truncated, and Lightning
+    would rather resume from an older good one than die on a corrupt newest one.
+    """
+    if not split_dir.is_dir():
+        return None
+    import torch
+
+    candidates = sorted(
+        (p for p in split_dir.glob("*.ckpt") if p.name != "finetune_start.ckpt"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for p in candidates:
+        try:
+            ckpt = torch.load(str(p), map_location="cpu", weights_only=False)
+        except Exception as e:  # noqa: BLE001 - truncated/corrupt, try the next
+            print(f"  ignoring unusable checkpoint {p.name} "
+                  f"({type(e).__name__}: {e})", file=sys.stderr)
+            continue
+        if "optimizer_states" in ckpt and "lr_schedulers" in ckpt:
+            return p
+    return None
+
+
 def prepare_finetune_checkpoint(release_ckpt: Path, dest: Path) -> Path:
     """Make a checkpoint that `fit --ckpt_path` will accept for FINE-TUNING.
 
@@ -367,6 +395,12 @@ def main() -> int:
         help="Random seed for train/val split",
     )
     parser.add_argument(
+        "--restart",
+        action="store_true",
+        help="Ignore checkpoints already in the output dir and start the "
+             "fine-tune over from the release checkpoint.",
+    )
+    parser.add_argument(
         "extra",
         nargs="*",
         help="Extra args passed through to Lightning. These are positional, so "
@@ -442,10 +476,17 @@ def main() -> int:
     # 2) Fine-tune split(s)
     if args.splits in ("both", "0.0-0.5"):
         out1 = args.output_dir / "split_0.0_0.5"
-        start1 = prepare_finetune_checkpoint(Path(CKPT_SPLIT_1), out1 / "finetune_start.ckpt")
+        start1 = None if args.restart else find_resume_checkpoint(out1)
+        if start1 is not None:
+            print(f"Split 0.0-0.5 resuming from {start1}")
+        else:
+            start1 = prepare_finetune_checkpoint(Path(CKPT_SPLIT_1), out1 / "finetune_start.ckpt")
         resumed = checkpoint_global_step(start1)
-        effective_max = resumed + args.steps
+        effective_max = args.steps
         print(f"Split 0.0-0.5 starts at global_step={resumed}; training until {effective_max}")
+        if resumed >= effective_max:
+            print(f"  NOTE: already at/past --steps ({resumed} >= {effective_max}); "
+                  f"raise --steps to train further.", file=sys.stderr)
         run_fit(
             CONFIG_SPLIT_1,
             start1,
@@ -462,10 +503,17 @@ def main() -> int:
 
     if args.splits in ("both", "0.5-1.0"):
         out2 = args.output_dir / "split_0.5_1.0"
-        start2 = prepare_finetune_checkpoint(Path(CKPT_SPLIT_2), out2 / "finetune_start.ckpt")
+        start2 = None if args.restart else find_resume_checkpoint(out2)
+        if start2 is not None:
+            print(f"Split 0.5-1.0 resuming from {start2}")
+        else:
+            start2 = prepare_finetune_checkpoint(Path(CKPT_SPLIT_2), out2 / "finetune_start.ckpt")
         resumed = checkpoint_global_step(start2)
-        effective_max = resumed + args.steps
+        effective_max = args.steps
         print(f"Split 0.5-1.0 starts at global_step={resumed}; training until {effective_max}")
+        if resumed >= effective_max:
+            print(f"  NOTE: already at/past --steps ({resumed} >= {effective_max}); "
+                  f"raise --steps to train further.", file=sys.stderr)
         run_fit(
             CONFIG_SPLIT_2,
             start2,
