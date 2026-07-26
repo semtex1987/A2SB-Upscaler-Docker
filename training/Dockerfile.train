@@ -31,7 +31,8 @@ RUN pip install --no-cache-dir \
     pytorch_lightning \
     lightning \
     rotary_embedding_torch \
-    tqdm
+    tqdm \
+    wandb
 
 RUN pip install --no-cache-dir --no-deps ssr_eval
 

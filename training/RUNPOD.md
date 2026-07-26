@@ -113,3 +113,32 @@ Each folder already carries a `report.csv` from the staging-side vetting; re-run
 only if you add material. For DSD/SACD sources, decimate to 44.1 kHz first
 (`aresample=resampler=soxr` in ffmpeg) — the vetter flags raw high-rate files as
 CHECK because their ultrasonic band may be noise-shaping hash, not music.
+
+## Tracking metrics with Weights & Biases
+
+The base config leaves `trainer.logger` null, so Lightning falls back to
+`CSVLogger` and metrics land in `<output-dir>/split_*/lightning_logs/version_*/metrics.csv`.
+That survives fine, but not if the pod does -- W&B keeps the history off-pod,
+which matters when pods churn.
+
+```bash
+pip install wandb          # already in the trainer image
+wandb login                # or: export WANDB_API_KEY=...
+```
+
+Then add `--wandb` to the run:
+
+```bash
+python training/finetune.py \
+    --data-dir /workspace/training_data \
+    --output-dir /root/training_output \
+    --splits both --steps 5000 --wandb --wandb-project a2sb-finetune
+```
+
+Each split is logged as its own run (`<prefix>-split_0.0_0.5`,
+`<prefix>-split_0.5_1.0`), so `--splits both` gives two comparable curves.
+`--wandb-run-name` sets the prefix; it defaults to the output directory name.
+
+Note that the useful audio metrics (`val_lsd`, `val_sisdr`, the per-timestep
+`val_loss_t=*`) only appear if validation actually runs -- see `--val-samples`
+and `--val-every`, which exist because a full validation cycle is expensive.

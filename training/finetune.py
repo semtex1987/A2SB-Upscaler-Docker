@@ -158,13 +158,15 @@ def build_manifest(
     return manifest_path, n_train_segments
 
 
-def write_data_override(
+def write_run_override(
     config_path: Path,
     dest: Path,
     root_folder: str,
     manifest_filename: str,
+    wandb_init: dict | None = None,
 ) -> Path:
-    """Write a small config that points the datamodule at our manifest.
+    """Write a small config that points the datamodule at our manifest, and
+    optionally swaps in a Weights & Biases logger.
 
     mix_dataset_config is an un-annotated dict parameter, and overriding a nested
     key through CLI dot-notation (--data.mix_dataset_config.CURATED.root_folder)
@@ -190,9 +192,21 @@ def write_data_override(
     if not patched:
         raise SystemExit(f"No data.mix_dataset_config found in {config_path}")
 
+    override: dict = {"data": {"mix_dataset_config": patched}}
+    if wandb_init is not None:
+        # The base config leaves trainer.logger null, so Lightning falls back to
+        # CSVLogger. Point it at W&B instead; going through this config keeps the
+        # nested class_path/init_args structure intact.
+        override["trainer"] = {
+            "logger": {
+                "class_path": "lightning.pytorch.loggers.WandbLogger",
+                "init_args": wandb_init,
+            }
+        }
+
     dest.parent.mkdir(parents=True, exist_ok=True)
     with open(dest, "w", encoding="utf-8") as f:
-        yaml.safe_dump({"data": {"mix_dataset_config": patched}}, f, sort_keys=False)
+        yaml.safe_dump(override, f, sort_keys=False)
     return dest
 
 
@@ -395,6 +409,27 @@ def main() -> int:
         help="Random seed for train/val split",
     )
     parser.add_argument(
+        "--wandb",
+        action="store_true",
+        help="Log metrics to Weights & Biases instead of the default CSV logger. "
+             "Needs the wandb package and a WANDB_API_KEY (or a prior "
+             "'wandb login'). Each split is logged as its own run.",
+    )
+    parser.add_argument(
+        "--wandb-project",
+        default="a2sb-finetune",
+        metavar="NAME",
+        help="W&B project name (default: a2sb-finetune).",
+    )
+    parser.add_argument(
+        "--wandb-run-name",
+        default=None,
+        metavar="NAME",
+        help="W&B run name prefix. The split is appended, so one invocation of "
+             "--splits both yields two clearly-named runs. Default: the output "
+             "directory name.",
+    )
+    parser.add_argument(
         "--val-every",
         type=int,
         default=None,
@@ -443,6 +478,20 @@ def main() -> int:
             f"      apt-get update && apt-get install -y ffmpeg libsndfile1\n"
             f"      pip install librosa soundfile"
         )
+    if args.wandb:
+        try:
+            import wandb  # noqa: F401
+        except Exception as e:  # noqa: BLE001
+            problems.append(
+                f"--wandb given but wandb is unusable ({type(e).__name__}: {e})\n"
+                f"    pip install wandb"
+            )
+        else:
+            if not (os.environ.get("WANDB_API_KEY") or
+                    (Path.home() / ".netrc").exists()):
+                print("  NOTE: no WANDB_API_KEY and no ~/.netrc; wandb may prompt "
+                      "or fall back to offline mode. Run 'wandb login' first.",
+                      file=sys.stderr)
     if not MAIN_PY.is_file():
         problems.append(
             f"A2SB main.py not found at {MAIN_PY}\n"
@@ -496,6 +545,16 @@ def main() -> int:
     if args.val_samples is not None:
         common_override += ["--data.val_max_samples", str(args.val_samples)]
 
+    def wandb_init_for(split_tag: str) -> dict | None:
+        if not args.wandb:
+            return None
+        prefix = args.wandb_run_name or args.output_dir.resolve().name
+        return {
+            "project": args.wandb_project,
+            "name": f"{prefix}-{split_tag}",
+            "save_dir": str(args.output_dir.resolve()),
+        }
+
     # 2) Fine-tune split(s)
     if args.splits in ("both", "0.0-0.5"):
         out1 = args.output_dir / "split_0.0_0.5"
@@ -518,9 +577,10 @@ def main() -> int:
             batch_size=args.batch_size,
             learning_rate=args.learning_rate,
             extra_args=common_override + args.extra,
-            data_override=write_data_override(
+            data_override=write_run_override(
                 CONFIG_SPLIT_1, out1 / "data_override.yaml",
                 root_folder, manifest_filename,
+                wandb_init=wandb_init_for("split_0.0_0.5"),
             ),
         )
 
@@ -545,9 +605,10 @@ def main() -> int:
             batch_size=args.batch_size,
             learning_rate=args.learning_rate,
             extra_args=common_override + args.extra,
-            data_override=write_data_override(
+            data_override=write_run_override(
                 CONFIG_SPLIT_2, out2 / "data_override.yaml",
                 root_folder, manifest_filename,
+                wandb_init=wandb_init_for("split_0.5_1.0"),
             ),
         )
 
