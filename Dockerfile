@@ -29,7 +29,7 @@ RUN pip install --no-cache-dir \
     matplotlib \
     librosa \
     soundfile \
-    torchaudio \
+    torchaudio==2.1.0 \
     einops \
     pytorch_lightning \
     lightning \
