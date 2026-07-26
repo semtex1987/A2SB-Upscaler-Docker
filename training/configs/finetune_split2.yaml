@@ -92,7 +92,7 @@ data:
   sampling_rate: 44100
   num_workers: 4
   batch_size: 2
-  val_max_samples: 256
+  val_max_samples: 32
   transforms_aug:
     - class_path: corruption.corruptions.MultinomialInpaintMaskTransform
       init_args:

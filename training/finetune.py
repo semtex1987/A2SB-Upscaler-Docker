@@ -395,6 +395,27 @@ def main() -> int:
         help="Random seed for train/val split",
     )
     parser.add_argument(
+        "--val-every",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Validate every N training batches (default: min(1000, "
+             "batches_per_epoch)). Validation is far more expensive than a "
+             "training step -- see --val-samples -- so raise this if validation "
+             "dominates wall-clock.",
+    )
+    parser.add_argument(
+        "--val-samples",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Cap validation samples (data.val_max_samples). Each one runs a "
+             "25-step diffusion sample, vocoding and audio metrics, so the "
+             "config's 256 can take ~an hour per cycle; 16-32 gives the same "
+             "signal in minutes. Checkpoint selection monitors global_step, not "
+             "a validation metric, so this does not change which are kept.",
+    )
+    parser.add_argument(
         "--restart",
         action="store_true",
         help="Ignore checkpoints already in the output dir and start the "
@@ -466,12 +487,14 @@ def main() -> int:
 
     # Clamp val_check_interval so Lightning never raises on small datasets.
     batches_per_epoch = max(1, n_train_segments // args.batch_size)
-    val_interval = min(1000, batches_per_epoch)
+    val_interval = args.val_every or min(1000, batches_per_epoch)
 
     # learning_rate is passed by run_fit itself; don't duplicate it here.
     common_override = [
         "--trainer.val_check_interval", str(val_interval),
     ]
+    if args.val_samples is not None:
+        common_override += ["--data.val_max_samples", str(args.val_samples)]
 
     # 2) Fine-tune split(s)
     if args.splits in ("both", "0.0-0.5"):
