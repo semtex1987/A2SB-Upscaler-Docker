@@ -40,12 +40,11 @@ CONFIG_SPLIT_1 = TRAINING_DIR / "configs" / "finetune_split1.yaml"
 CONFIG_SPLIT_2 = TRAINING_DIR / "configs" / "finetune_split2.yaml"
 
 
-def get_duration(path: str) -> float | None:
-    try:
-        import librosa
-        return float(librosa.get_duration(path=path))
-    except Exception:
-        return None
+def get_duration(path: str) -> float:
+    """Duration in seconds. Raises if the file can't be read -- the caller
+    reports the reason, so a missing decoder is distinguishable from bad audio."""
+    import librosa
+    return float(librosa.get_duration(path=path))
 
 
 def find_audio_files(data_dir: Path) -> list[Path]:
@@ -95,9 +94,11 @@ def build_manifest(
     # (path, duration); skip files too short to yield at least one segment
     rows: list[tuple[str, float]] = []
     for f in files:
-        d = get_duration(str(f))
-        if d is None:
-            print(f"  skip (unreadable): {f.name}", file=sys.stderr)
+        try:
+            d = get_duration(str(f))
+        except Exception as e:  # noqa: BLE001 - report why, then keep scanning
+            print(f"  skip (unreadable: {type(e).__name__}: {e}): {f.name}",
+                  file=sys.stderr)
             continue
         if d < MIN_DURATION_SEC:
             print(f"  skip (too short {d:.1f}s < {MIN_DURATION_SEC:.1f}s): {f.name}", file=sys.stderr)
@@ -377,6 +378,16 @@ def main() -> int:
     # 0) Preflight: fail fast with an actionable message rather than letting a
     # missing framework/checkpoint surface later as an opaque Lightning error.
     problems: list[str] = []
+    try:
+        import librosa  # noqa: F401
+        import soundfile  # noqa: F401
+    except Exception as e:  # noqa: BLE001 - also catches libsndfile load failures
+        problems.append(
+            f"audio stack unusable ({type(e).__name__}: {e})\n"
+            f"    Every file would be reported as unreadable. Install it with:\n"
+            f"      apt-get update && apt-get install -y ffmpeg libsndfile1\n"
+            f"      pip install librosa soundfile"
+        )
     if not MAIN_PY.is_file():
         problems.append(
             f"A2SB main.py not found at {MAIN_PY}\n"
