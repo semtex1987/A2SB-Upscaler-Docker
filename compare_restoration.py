@@ -56,6 +56,10 @@ def band_stats(Sa, Sb, freqs, lo, hi, np):
         "a_rms_db": 20.0 * np.log10(max(float(np.sqrt((a ** 2).mean())), 1e-12) / ref),
         "b_rms_db": 20.0 * np.log10(max(float(np.sqrt((b ** 2).mean())), 1e-12) / ref),
         "lsd": float(np.sqrt(((a_db - b_db) ** 2).mean())),
+        # signed, so over- vs under-shoot is readable at a glance; LSD alone is
+        # symmetric and cannot distinguish the two.
+        "delta_db": 20.0 * np.log10(max(float(np.sqrt((b ** 2).mean())), 1e-12)
+                                    / max(float(np.sqrt((a ** 2).mean())), 1e-12)),
     }
 
 
@@ -85,28 +89,28 @@ def main() -> int:
     print(f"restored : {args.restored}  ({srb} Hz)")
     print(f"compared at {sr} Hz, cutoff {args.cutoff:.0f} Hz\n")
 
-    print(f"{'band':<22}{'original':>10}{'restored':>10}{'LSD':>9}")
-    print("-" * 51)
+    print(f"{'band':<22}{'original':>10}{'restored':>10}{'delta':>9}{'LSD':>9}")
+    print("-" * 60)
     below = band_stats(Sa, Sb, freqs, 0.0, args.cutoff, np)
     if below:
         print(f"{'below cutoff (check)':<22}{below['a_rms_db']:>9.1f}dB"
-              f"{below['b_rms_db']:>9.1f}dB{below['lsd']:>8.2f}")
+              f"{below['b_rms_db']:>9.1f}dB{below['delta_db']:>+8.1f}dB{below['lsd']:>8.2f}")
     above = band_stats(Sa, Sb, freqs, args.cutoff, nyq, np)
     if above:
         print(f"{'ABOVE cutoff (scored)':<22}{above['a_rms_db']:>9.1f}dB"
-              f"{above['b_rms_db']:>9.1f}dB{above['lsd']:>8.2f}")
+              f"{above['b_rms_db']:>9.1f}dB{above['delta_db']:>+8.1f}dB{above['lsd']:>8.2f}")
 
     # Per-octave detail above the cutoff: a single number hides whether the model
     # tracks the original's roll-off or flattens it out.
-    print(f"\n{'sub-band':<22}{'original':>10}{'restored':>10}{'LSD':>9}")
-    print("-" * 51)
+    print(f"\n{'sub-band':<22}{'original':>10}{'restored':>10}{'delta':>9}{'LSD':>9}")
+    print("-" * 60)
     lo = args.cutoff
     while lo < nyq:
         hi = min(lo + 2000.0, nyq)
         st = band_stats(Sa, Sb, freqs, lo, hi, np)
         if st:
             print(f"{f'{lo/1000:.0f}-{hi/1000:.0f} kHz':<22}{st['a_rms_db']:>9.1f}dB"
-                  f"{st['b_rms_db']:>9.1f}dB{st['lsd']:>8.2f}")
+                  f"{st['b_rms_db']:>9.1f}dB{st['delta_db']:>+8.1f}dB{st['lsd']:>8.2f}")
         lo = hi
 
     if below and below["lsd"] > 6.0:
