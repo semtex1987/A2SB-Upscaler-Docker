@@ -1,0 +1,111 @@
+@import "tailwindcss";
+
+/* Self-hosted so a pod without outbound internet still renders correctly. */
+@import "@fontsource/fira-sans/400.css";
+@import "@fontsource/fira-sans/500.css";
+@import "@fontsource/fira-sans/600.css";
+@import "@fontsource/fira-sans/700.css";
+@import "@fontsource-variable/fira-code";
+
+@theme {
+  --font-sans: "Fira Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Fira Code Variable", ui-monospace, "SFMono-Regular", monospace;
+
+  /* Instrument-panel neutrals. Deep slate rather than pure black so the
+     spectrogram's own blacks stay distinguishable from the chrome. */
+  --color-canvas: #0f172a;
+  --color-surface: #1e293b;
+  --color-surface-raised: #273549;
+  --color-stroke: #334155;
+  --color-stroke-strong: #475569;
+
+  --color-ink: #f1f5f9;
+  --color-ink-muted: #94a3b8;
+  --color-ink-faint: #64748b;
+
+  --color-accent: #3b82f6;
+  --color-accent-hover: #60a5fa;
+  --color-gain: #22c55e;
+  --color-caution: #f59e0b;
+  --color-fault: #ef4444;
+
+  --radius-panel: 0.75rem;
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    /* 16px floor: this is a tool people read numbers off, on a projector as
+       often as a laptop. */
+    @apply bg-canvas text-ink font-sans text-base antialiased;
+  }
+
+  /* One focus treatment everywhere, visible against every surface. */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-accent;
+  }
+
+  ::selection {
+    @apply bg-accent/30;
+  }
+
+  /* Numbers are tabular by default so dB and Hz columns line up. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer utilities {
+  .scrollbar-slim {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-stroke-strong) transparent;
+  }
+}
+
+@layer components {
+  /* Range track fill. The two-stop hard stop is how a native range shows how
+     far along it is; --fill is set per element by the Slider component. */
+  .range-input::-webkit-slider-runnable-track {
+    background: linear-gradient(
+      to right,
+      var(--color-accent) var(--fill, 0%),
+      var(--color-canvas) var(--fill, 0%)
+    );
+  }
+
+  .range-input::-moz-range-progress {
+    background: var(--color-accent);
+    height: 0.375rem;
+    border-radius: 9999px;
+  }
+}
+
+@keyframes indeterminate-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+/* The playhead is the only motion that survives a reduced-motion preference:
+   it communicates position rather than decorating. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

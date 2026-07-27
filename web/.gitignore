@@ -1,0 +1,5 @@
+node_modules/
+# Also keeps Tailwind from scanning the previous bundle as a source file, which
+# would make each rebuild inherit the last build's class list.
+dist/
+*.local
