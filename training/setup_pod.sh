@@ -121,12 +121,28 @@ sys.exit(0 if torchaudio.__version__.split('+')[0]==torch.__version__.split('+')
     fi
 fi
 
-# Left unpinned so pip can resolve against whatever torch the pod ships; the
-# verify step below is what actually confirms the combination works.
+# Versions match training/Dockerfile.train, which is the combination that has
+# actually been run. Only genuinely torch-coupled packages are left to float
+# (numpy/scipy/lightning resolve against the pod's torch); everything else is
+# pinned, because API drift in a package that has nothing to do with torch is
+# what breaks these setups. moviepy is the cautionary case: 2.x moved
+# moviepy.video.io.bindings, which plotting_utils imports, so an unpinned
+# install fails at import with the checkpoint already downloaded.
 pip install -q --no-cache-dir \
-    numpy scipy matplotlib moviepy "jsonargparse[signatures]" scikit-image \
-    torchlibrosa pyyaml librosa soundfile einops pytorch_lightning lightning \
-    rotary_embedding_torch tqdm wandb tensorboard >/dev/null \
+    numpy scipy pytorch_lightning lightning \
+    moviepy==1.0.3 \
+    "jsonargparse[signatures]==4.35.0" \
+    scikit-image==0.25.2 \
+    torchlibrosa==0.1.0 \
+    pyyaml==6.0.2 \
+    matplotlib==3.10.0 \
+    librosa==0.11.0 \
+    soundfile==0.13.1 \
+    einops==0.8.1 \
+    rotary_embedding_torch==0.8.9 \
+    tqdm==4.67.1 \
+    wandb==0.19.6 \
+    tensorboard >/dev/null \
     && ok "installed training deps" || warn "some deps failed to install"
 # ssr_eval declares a dependency on 'wave', which is a stdlib module and cannot
 # be installed; --no-deps is the only way it installs at all.
