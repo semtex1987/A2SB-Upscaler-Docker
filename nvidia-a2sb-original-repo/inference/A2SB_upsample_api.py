@@ -17,8 +17,10 @@ import json
 import argparse
 import glob
 import subprocess
+import sys
 import yaml
 import time 
+from collections import deque
 from datetime import datetime
 import shutil
 import csv
@@ -46,23 +48,38 @@ def save_yaml(data, prefix="../configs/temp"):
 
 
 def shell_run_cmd(cmd, cwd=None):
-    print('running:', " ".join(cmd))
-    result = subprocess.run(
+    print('running:', " ".join(cmd), flush=True)
+
+    # Relayed byte-for-byte rather than captured, so the caller sees Lightning's
+    # progress bar while it runs. subprocess.run(stdout=PIPE) would withhold
+    # every line until the sampler had already finished.
+    child_env = os.environ.copy()
+    child_env["PYTHONUNBUFFERED"] = "1"
+    process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+        stderr=subprocess.STDOUT,
         cwd=cwd,
-        check=False,
+        env=child_env,
     )
-    if result.stdout:
-        print(result.stdout)
-    if result.stderr:
-        print(result.stderr)
-    if result.returncode != 0:
+
+    tail = deque(maxlen=8000)
+    stream = sys.stdout.buffer
+    while True:
+        chunk = process.stdout.read(1)
+        if not chunk:
+            break
+        stream.write(chunk)
+        if chunk in (b"\n", b"\r"):
+            stream.flush()
+        tail.append(chunk)
+    stream.flush()
+
+    returncode = process.wait()
+    if returncode != 0:
         raise RuntimeError(
-            f"Command failed with exit code {result.returncode}: {' '.join(cmd)}\n"
-            f"stderr:\n{result.stderr}"
+            f"Command failed with exit code {returncode}: {' '.join(cmd)}\n"
+            f"output tail:\n{b''.join(tail).decode('utf-8', errors='replace')}"
         )
 
 
