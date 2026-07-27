@@ -1,4 +1,4 @@
-# Training container for A2SB fine-tuning (no Gradio).
+# Training container for A2SB fine-tuning (no web UI).
 # Same base and clone as inference; adds training script and configs.
 FROM pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
 
@@ -15,24 +15,29 @@ WORKDIR /app
 
 COPY nvidia-a2sb-original-repo/ /app/
 
+# Pinned to match the inference image, so a checkpoint fine-tuned here loads
+# there. torch in particular must stay on the base image's CUDA 11.8 build:
+# rotary_embedding_torch >= 0.9 requires torch >= 2.4 and, left unpinned, drags
+# in CUDA 13 wheels that this base image cannot use.
 RUN pip install --no-cache-dir \
-    moviepy==1.0.3 \
-    "jsonargparse[signatures]>=4.27.7" \
-    scikit-image \
-    torchlibrosa \
-    pyyaml \
-    numpy \
-    scipy \
-    matplotlib \
-    librosa \
-    soundfile \
+    torch==2.1.0 \
     torchaudio==2.1.0 \
-    einops \
-    pytorch_lightning \
-    lightning \
-    rotary_embedding_torch==0.9.1 \
-    tqdm \
-    wandb
+    moviepy==1.0.3 \
+    "jsonargparse[signatures]==4.35.0" \
+    scikit-image==0.25.2 \
+    torchlibrosa==0.1.0 \
+    pyyaml==6.0.2 \
+    numpy==1.26.4 \
+    scipy==1.15.3 \
+    matplotlib==3.10.0 \
+    librosa==0.11.0 \
+    soundfile==0.13.1 \
+    einops==0.8.1 \
+    pytorch_lightning==2.5.0 \
+    lightning==2.5.0 \
+    rotary_embedding_torch==0.8.9 \
+    tqdm==4.67.1 \
+    wandb==0.19.6
 
 RUN pip install --no-cache-dir --no-deps ssr_eval
 
@@ -42,7 +47,9 @@ RUN wget -O ckpts/A2SB_twosplit_0.5_1.0_release.ckpt https://huggingface.co/nvid
 RUN wget -O ckpts/A2SB_onesplit_0.0_1.0_release.ckpt https://huggingface.co/nvidia/audio_to_audio_schrodinger_bridge/resolve/main/ckpt/A2SB_onesplit_0.0_1.0_release.ckpt
 RUN wget -O ckpts/A2SB_twosplit_0.0_0.5_release.ckpt https://huggingface.co/nvidia/audio_to_audio_schrodinger_bridge/resolve/main/ckpt/A2SB_twosplit_0.0_0.5_release.ckpt
 
-ENV CUDA_VISIBLE_DEVICES=0 \
+# CUDA_VISIBLE_DEVICES is deliberately NOT pinned here: pinning it to 0 caps the
+# container at one GPU no matter what --trainer.devices says. Let Lightning pick.
+ENV \
     MKL_THREADING_LAYER=GNU \
     PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 

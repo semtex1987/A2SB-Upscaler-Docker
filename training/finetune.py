@@ -409,6 +409,17 @@ def main() -> int:
         help="Random seed for train/val split",
     )
     parser.add_argument(
+        "--devices",
+        type=int,
+        default=None,
+        metavar="N",
+        help="GPUs to train on (default: whatever the config says, 1). With more "
+             "than one, DDP is used and the effective batch becomes "
+             "devices x --batch-size x accumulate_grad_batches, so consider "
+             "raising --learning-rate to match. Saturate a single GPU with "
+             "--batch-size before adding a second one.",
+    )
+    parser.add_argument(
         "--wandb",
         action="store_true",
         help="Log metrics to Weights & Biases instead of the default CSV logger. "
@@ -542,6 +553,11 @@ def main() -> int:
     common_override = [
         "--trainer.val_check_interval", str(val_interval),
     ]
+    if args.devices is not None:
+        common_override += ["--trainer.devices", str(args.devices)]
+        # 'auto' picks a single-device strategy; multi-GPU needs DDP named.
+        if args.devices > 1:
+            common_override += ["--trainer.strategy", "ddp"]
     if args.val_samples is not None:
         common_override += ["--data.val_max_samples", str(args.val_samples)]
 
