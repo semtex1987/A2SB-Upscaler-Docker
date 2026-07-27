@@ -28,6 +28,11 @@ def _read_int_env(name: str, default: int) -> int:
 
 INPUT_DIR = _ensure_runtime_dir(os.environ.get("A2SB_INPUT_DIR", "/app/inputs"), "a2sb-inputs")
 OUTPUT_DIR = _ensure_runtime_dir(os.environ.get("A2SB_OUTPUT_DIR", "/app/outputs"), "a2sb-outputs")
+TRAINING_DATA_DIR = Path(os.environ.get("A2SB_TRAINING_DATA_DIR", "/app/training_data"))
+TRAINING_OUTPUT_DIR = _ensure_runtime_dir(
+    os.environ.get("A2SB_TRAINING_OUTPUT_DIR", str(OUTPUT_DIR / "training")),
+    "a2sb-training",
+)
 
 #: Per-run artefacts live under here so re-running with different settings no
 #: longer overwrites earlier results.
@@ -57,6 +62,32 @@ CUTOFF_MAX_HZ = 20000
 CUTOFF_DEFAULT_HZ = 14000
 
 AUDIO_EXTENSIONS = {".wav", ".flac", ".mp3", ".ogg", ".m4a", ".aiff", ".aif", ".opus", ".wma"}
+
+# Training configuration
+TRAINING_SCRIPT = os.environ.get("A2SB_TRAINING_SCRIPT", "/app/training/finetune.py")
+TRAINING_APP_ROOT = os.environ.get("A2SB_APP_ROOT", "/app")
+TRAINING_CKPT_DIR = os.environ.get("A2SB_CKPT_DIR", "/app/ckpts")
+FINETUNED_CKPT_DIR = os.environ.get("A2SB_FINETUNED_CKPT_DIR", "/app/ckpts/finetuned")
+ENSEMBLE_CONFIG_PATH = os.environ.get("A2SB_ENSEMBLE_CONFIG", "/app/configs/ensemble_2split_sampling.yaml")
+
+TRAIN_STEPS_MIN = 100
+TRAIN_STEPS_MAX = 50000
+TRAIN_STEPS_DEFAULT = 5000
+
+TRAIN_BATCH_MIN = 1
+TRAIN_BATCH_MAX = 8
+TRAIN_BATCH_DEFAULT = 2
+
+TRAIN_LR_DEFAULT = 5e-5
+
+# Minimum free disk bytes required before starting a training run.
+# Two splits × (top-3 + last) ≈ 18 GB, plus some headroom.
+TRAIN_MIN_FREE_BYTES = 25 * 1024 ** 3
+
+# Spectral thresholds for dataset vetting (aligned with training/vet_dataset.py).
+VET_PASS_HZ = 20500.0     # PASS: content genuinely reaches this frequency
+VET_CHECK_HZ = 17000.0    # CHECK: between here and PASS_HZ — could be 320 kbps
+# Below CHECK_HZ is REJECT.
 
 #: Kept small enough to stream to the browser but dense enough to resolve the
 #: 14-22 kHz band the tool exists to reconstruct.

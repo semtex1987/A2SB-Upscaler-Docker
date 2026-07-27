@@ -1,8 +1,8 @@
 """Source inspection: what bandwidth a file really has, and spectrogram data.
 
-The bandwidth scan mirrors `training/vet_dataset.py::spectral_scan` so the
-cutoff this UI suggests agrees with what the dataset vetting tool reports.
-The thresholds below must stay in sync with that module.
+`spectral_scan` here and in `training/vet_dataset.py` answer the same question
+and are kept in sync, so the cutoff this UI suggests agrees with what the
+dataset vetting tool reports.
 """
 from __future__ import annotations
 
@@ -22,9 +22,19 @@ from server.config import (
     SPECTROGRAM_HEIGHT,
     SPECTROGRAM_WIDTH,
 )
+from server.serialization import camelize
 
 #: A drop steeper than this across ~1 kHz counts as a brickwall cliff.
-SHELF_DROP_DB = 40.0
+SHELF_DROP_DB = 30.0
+#: How far the whole band above a cliff must sit below the band under it. Stops
+#: a narrow notch from being read as a bandwidth limit.
+DEAD_PLATEAU_DB = 25.0
+#: Median window for the spectral envelope, wide enough to erase per-bin noise
+#: scatter and narrow enough to keep a brickwall transition steep.
+SMOOTH_HZ = 430.0
+#: With no cliff, content is considered present down to this level below the
+#: loudest band.
+CONTENT_RANGE_DB = 60.0
 #: A cliff this far below Nyquist means the lowpass is artificial, not musical.
 DEAD_BAND_HZ = 2000.0
 #: Window for the spectral scan. Long enough to catch intermittent HF, short
@@ -51,7 +61,7 @@ class SourceAnalysis:
     suggested_cutoff_hz: int
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return camelize(asdict(self))
 
 
 def _load_for_analysis(path: str) -> tuple[np.ndarray, int]:
@@ -59,13 +69,29 @@ def _load_for_analysis(path: str) -> tuple[np.ndarray, int]:
     return y, int(sr)
 
 
+def median_smooth(values: np.ndarray, window: int) -> np.ndarray:
+    """Running median with edge padding. Kept in sync with `vet_dataset.py`."""
+    if window <= 1 or values.size < window:
+        return values
+    half = window // 2
+    padded = np.pad(values, half, mode="edge")
+    return np.median(np.lib.stride_tricks.sliding_window_view(padded, window), axis=-1)
+
+
 def spectral_scan(y: np.ndarray, sr: int) -> tuple[float, bool]:
     """Highest frequency carrying real energy, and whether the spectrum cliffs there.
 
-    The edge comes from the 95th-percentile-over-time spectrum rather than the
-    mean: transient HF (pick attacks, brushes, cymbals) is intermittent and a
-    mean spectrum averages it below the noise floor, which unfairly judges
-    sparse acoustic material as band-limited.
+    The scan looks for a brickwall cliff first and only falls back to a level
+    threshold when there is none. Thresholding first does not work: a
+    level-based floor assumes the dead band is the quietest part of the
+    spectrum, which holds for a transcode but not for ordinary material whose
+    spectrum already slopes 60 dB from bass to Nyquist. Against real music that
+    approach places the "edge" somewhere in the mid-band.
+
+    The spectrum is the 95th percentile over time rather than the mean:
+    transient HF (pick attacks, brushes, cymbals) is intermittent, and a mean
+    spectrum averages it below the noise floor, which unfairly judges sparse
+    acoustic material as band-limited.
     """
     n_fft = 4096
     spec = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=1024))
@@ -76,22 +102,42 @@ def spectral_scan(y: np.ndarray, sr: int) -> tuple[float, bool]:
         return 0.0, False
     p95_db = 20.0 * np.log10(np.maximum(p95 / peak, 1e-12))
 
-    # Adaptive floor: the file's own quietest bins. Above an artificial cutoff
-    # the dead region sits at this floor; in a genuine file HF energy stays
-    # above it toward Nyquist.
-    floor = float(np.percentile(p95_db, 10))
-    above = np.where(p95_db > floor + 6.0)[0]
+    bin_width = sr / n_fft
+    # Median rather than mean: a dead band is not silent, it is dither and
+    # coding noise whose per-bin level swings ±10 dB. A mean smooths that into
+    # a slope; a median flattens it into the plateau the cliff test needs.
+    curve = median_smooth(p95_db, max(3, int(round(SMOOTH_HZ / bin_width)) | 1))
+
+    look = max(1, int(round(500.0 / bin_width)))
+    cliff_bin, cliff_drop = _steepest_drop(curve, look, start_bin=int(3000.0 / bin_width))
+
+    if cliff_bin is not None and cliff_drop > SHELF_DROP_DB:
+        pre = float(np.median(curve[max(0, cliff_bin - 3 * look) : cliff_bin - look + 1]))
+        post = float(np.median(curve[min(len(curve) - 1, cliff_bin + look) :]))
+        # Everything above the cliff must stay down. Without this a steep but
+        # local dip (a notch, a crossover null) would read as a brickwall.
+        if pre - post > DEAD_PLATEAU_DB:
+            shoulder = np.where(curve[: cliff_bin + 1] >= pre - 6.0)[0]
+            edge_bin = int(shoulder.max()) if len(shoulder) else cliff_bin
+            return float(freqs[edge_bin]), True
+
+    # No cliff: report where content fades out relative to the loudest band.
+    above = np.where(curve > curve.max() - CONTENT_RANGE_DB)[0]
     if len(above) == 0:
         return 0.0, False
-    edge_bin = int(above.max())
-    edge_hz = float(freqs[edge_bin])
+    return float(freqs[int(above.max())]), False
 
-    bin_width = sr / n_fft
-    look = max(1, int(round(500.0 / bin_width)))
-    lo = max(0, edge_bin - look)
-    hi = min(len(p95_db) - 1, edge_bin + look)
-    drop = float(p95_db[lo] - p95_db[hi])
-    return edge_hz, drop > SHELF_DROP_DB
+
+def _steepest_drop(curve: np.ndarray, look: int, start_bin: int) -> tuple[Optional[int], float]:
+    """Bin with the largest fall across ±`look` bins, ignoring the low end."""
+    if curve.size <= 2 * look + 1:
+        return None, 0.0
+    drops = curve[: -2 * look] - curve[2 * look :]
+    first = max(start_bin, 0)
+    if first >= drops.size:
+        return None, 0.0
+    offset = int(np.argmax(drops[first:])) + first
+    return offset + look, float(drops[offset])
 
 
 def _suggest_cutoff(edge_hz: float, shelf: bool, sr: int) -> tuple[int, str, str]:
