@@ -51,11 +51,18 @@ PY
         ok "A2SB source"
     else fail "A2SB source missing at $REPO_DIR/nvidia-a2sb-original-repo/main.py"; rc=1; fi
 
-    # networks.py is the model definition; importing it exercises the deps that
-    # only the training path touches.
-    if (cd "$REPO_DIR/nvidia-a2sb-original-repo" 2>/dev/null && python3 -c "import networks" 2>/dev/null); then
-        ok "A2SB networks import"
-    else fail "A2SB networks import"; rc=1; fi
+    # Import exactly what main.py imports. A narrower check (e.g. just networks)
+    # passes while the training run still dies on a module reached only through
+    # the lightning module -- matplotlib via plotting_utils being the example
+    # that motivated this.
+    if (cd "$REPO_DIR/nvidia-a2sb-original-repo" 2>/dev/null && python3 - <<'PYCHK' 2>&1
+from A2SB_lightning_module import STFTBridgeModel, LogValidationInpaintingSTFTCallback
+from datasets.datamodule import STFTAudioDataModule
+from lightning.pytorch.cli import LightningCLI
+PYCHK
+    ); then
+        ok "A2SB training imports"
+    else fail "A2SB training imports (see error above)"; rc=1; fi
 
     local missing=0
     for f in A2SB_twosplit_0.0_0.5_release.ckpt A2SB_twosplit_0.5_1.0_release.ckpt; do
@@ -117,8 +124,8 @@ fi
 # Left unpinned so pip can resolve against whatever torch the pod ships; the
 # verify step below is what actually confirms the combination works.
 pip install -q --no-cache-dir \
-    moviepy "jsonargparse[signatures]" scikit-image torchlibrosa pyyaml \
-    librosa soundfile einops pytorch_lightning lightning \
+    numpy scipy matplotlib moviepy "jsonargparse[signatures]" scikit-image \
+    torchlibrosa pyyaml librosa soundfile einops pytorch_lightning lightning \
     rotary_embedding_torch tqdm wandb tensorboard >/dev/null \
     && ok "installed training deps" || warn "some deps failed to install"
 # ssr_eval declares a dependency on 'wave', which is a stdlib module and cannot
