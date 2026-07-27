@@ -547,7 +547,14 @@ def main() -> int:
 
     # Clamp val_check_interval so Lightning never raises on small datasets.
     batches_per_epoch = max(1, n_train_segments // args.batch_size)
-    val_interval = args.val_every or min(1000, batches_per_epoch)
+    # val_check_interval counts BATCHES, and Lightning rejects a value larger
+    # than one epoch's worth. batches_per_epoch shrinks as --batch-size grows,
+    # so a --val-every that was fine at batch 2 becomes invalid at batch 16.
+    val_interval = min(args.val_every or 1000, batches_per_epoch)
+    if args.val_every and val_interval != args.val_every:
+        print(f"  NOTE: --val-every {args.val_every} exceeds one epoch "
+              f"({batches_per_epoch} batches at --batch-size {args.batch_size}); "
+              f"clamped to {val_interval}.", file=sys.stderr)
 
     # learning_rate is passed by run_fit itself; don't duplicate it here.
     common_override = [
