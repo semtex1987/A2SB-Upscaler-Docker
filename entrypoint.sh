@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
-
+# 5. Download Checkpoints
+wget -O /app/ckpts/A2SB_twosplit_0.5_1.0_release.ckpt https://huggingface.co/nvidia/audio_to_audio_schrodinger_bridge/resolve/main/ckpt/A2SB_twosplit_0.5_1.0_release.ckpt
+wget -O /app/ckpts/A2SB_onesplit_0.0_1.0_release.ckpt https://huggingface.co/nvidia/audio_to_audio_schrodinger_bridge/resolve/main/ckpt/A2SB_onesplit_0.0_1.0_release.ckpt
+wget -O /app/ckpts/A2SB_twosplit_0.0_0.5_release.ckpt https://huggingface.co/nvidia/audio_to_audio_schrodinger_bridge/resolve/main/ckpt/A2SB_twosplit_0.0_0.5_release.ckpt
 # If fine-tuned checkpoints are mounted at /app/ckpts/finetuned, point the
 # ensemble config at them instead of the release checkpoints.
 python3 /app/update_ckpt_config.py || true

@@ -29,6 +29,95 @@ INPUT_DIR = _ensure_runtime_dir(os.environ.get("A2SB_INPUT_DIR", "/app/inputs"),
 OUTPUT_DIR = _ensure_runtime_dir(os.environ.get("A2SB_OUTPUT_DIR", "/app/outputs"), "a2sb-outputs")
 
 
+# --- Checkpoint selection -------------------------------------------------
+# Inference runs as a fresh subprocess that reads the ensemble config at launch,
+# so switching models only means writing the chosen paths into that config
+# before the run. No restart, and no hand-editing YAML between A/B runs.
+CKPT_DIR = os.environ.get("A2SB_CKPT_DIR", "/app/ckpts")
+FINETUNED_DIR = os.environ.get("A2SB_FINETUNED_DIR", os.path.join(CKPT_DIR, "finetuned"))
+ENSEMBLE_CONFIG = os.environ.get(
+    "A2SB_ENSEMBLE_CONFIG", "/app/configs/ensemble_2split_sampling.yaml"
+)
+# The ensemble splits the diffusion trajectory in half and BOTH halves run on
+# every restoration, so each is selectable independently -- fine-tuning one split
+# and leaving the other on release weights is a normal intermediate state.
+RELEASE_CKPTS = [
+    "A2SB_twosplit_0.0_0.5_release.ckpt",
+    "A2SB_twosplit_0.5_1.0_release.ckpt",
+]
+STOCK_PREFIX = "stock: "
+FINETUNED_PREFIX = "finetuned: "
+
+
+def discover_checkpoints(split_idx):
+    """Selectable checkpoints for one split: its release checkpoint plus every
+    .ckpt in the fine-tuned folder. Filenames are not assumed, so checkpoints
+    from a new training run appear without any code change."""
+    choices = []
+    release = os.path.join(CKPT_DIR, RELEASE_CKPTS[split_idx])
+    if os.path.isfile(release):
+        choices.append(STOCK_PREFIX + RELEASE_CKPTS[split_idx])
+    if os.path.isdir(FINETUNED_DIR):
+        for name in sorted(os.listdir(FINETUNED_DIR)):
+            if name.endswith(".ckpt"):
+                choices.append(FINETUNED_PREFIX + name)
+    return choices
+
+
+def resolve_checkpoint(label, split_idx):
+    """Map a dropdown label back to a path on disk."""
+    if not label:
+        return os.path.join(CKPT_DIR, RELEASE_CKPTS[split_idx])
+    if label.startswith(STOCK_PREFIX):
+        return os.path.join(CKPT_DIR, label[len(STOCK_PREFIX):])
+    if label.startswith(FINETUNED_PREFIX):
+        return os.path.join(FINETUNED_DIR, label[len(FINETUNED_PREFIX):])
+    return label
+
+
+def apply_checkpoint_selection(split1_label, split2_label):
+    """Point the ensemble config at the selected checkpoints.
+
+    Returns (paths, tag); tag is a short filename-safe description of the pair
+    so outputs record which model produced them."""
+    import yaml
+
+    paths = [resolve_checkpoint(split1_label, 0), resolve_checkpoint(split2_label, 1)]
+    for path in paths:
+        if not os.path.isfile(path):
+            raise gr.Error(f"Checkpoint not found: {path}")
+
+    try:
+        with open(ENSEMBLE_CONFIG, "r") as f:
+            data = yaml.safe_load(f)
+        if "pretrained_checkpoints" not in (data.get("model") or {}):
+            raise gr.Error(f"{ENSEMBLE_CONFIG} has no model.pretrained_checkpoints")
+        data["model"]["pretrained_checkpoints"] = paths
+        with open(ENSEMBLE_CONFIG, "w") as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+    except gr.Error:
+        raise
+    except Exception as e:
+        raise gr.Error(f"Could not update {ENSEMBLE_CONFIG}: {e}")
+
+    tag = "-".join(
+        "rel" if "_release" in os.path.basename(p) else "ft" for p in paths
+    )
+    print(f"[A2SB] checkpoints: split1={paths[0]} split2={paths[1]} tag={tag}", flush=True)
+    return paths, tag
+
+
+def refresh_checkpoint_choices():
+    """Re-scan disk so checkpoints copied in after startup appear without a restart."""
+    updates = []
+    for idx in range(2):
+        choices = discover_checkpoints(idx)
+        updates.append(gr.update(choices=choices, value=choices[0] if choices else None))
+    return tuple(updates)
+
+
+
+
 def _read_int_env(name, default):
     raw = os.environ.get(name)
     if raw is None:
@@ -295,7 +384,8 @@ def list_staged_files(staged_paths_text):
     return "\n".join(lines)
 
 
-def restore_one_audio(input_file, steps, cutoff_hz, batch_size, progress, file_index, total_files):
+def restore_one_audio(input_file, steps, cutoff_hz, batch_size, progress, file_index,
+                      total_files, run_tag=""):
     try:
         audio = AudioSegment.from_file(input_file)
         audio = ensure_a2sb_input_format(audio)
@@ -303,7 +393,9 @@ def restore_one_audio(input_file, steps, cutoff_hz, batch_size, progress, file_i
         raise gr.Error(f"Failed to load audio: {e}")
 
     base_name = os.path.splitext(os.path.basename(input_file))[0].replace(" ", "_")
-    final_output_path = os.path.join(OUTPUT_DIR, f"{base_name}_restored.wav")
+    # Settings live in the filename so two runs can never be silently compared
+    # against each other with a different cutoff, step count or model.
+    final_output_path = os.path.join(OUTPUT_DIR, f"{base_name}_restored{run_tag}.wav")
     comparison_input_path = os.path.join(INPUT_DIR, f"{base_name}_filtered_input.wav")
 
     file_start = file_index / total_files
@@ -380,7 +472,8 @@ def restore_one_audio(input_file, steps, cutoff_hz, batch_size, progress, file_i
     return final_output_path, plot_path, hf_note
 
 
-def restore_audio(input_files, steps, cutoff_choice, batch_size, progress=gr.Progress()):
+def restore_audio(input_files, steps, cutoff_choice, batch_size,
+                  split1_choice=None, split2_choice=None, progress=gr.Progress()):
     files = normalize_input_files(input_files)
     if not files:
         raise gr.Error(
@@ -393,6 +486,9 @@ def restore_audio(input_files, steps, cutoff_choice, batch_size, progress=gr.Pro
         raise gr.Error("Cutoff must be a number in Hz (e.g. 14000).")
     if not 1000 <= cutoff_hz <= 20000:
         raise gr.Error("Cutoff must be between 1000 and 20000 Hz.")
+
+    _, model_tag = apply_checkpoint_selection(split1_choice, split2_choice)
+    run_tag = f"_c{cutoff_hz}_s{int(steps)}_{model_tag}"
 
     restored_outputs = []
     plot_outputs = []
@@ -409,6 +505,7 @@ def restore_audio(input_files, steps, cutoff_choice, batch_size, progress=gr.Pro
                 progress,
                 idx,
                 len(files),
+                run_tag,
             )
             restored_outputs.append(restored_path)
             plot_outputs.append(plot_path)
@@ -454,7 +551,8 @@ def select_preview(selection, restored_outputs, plot_outputs):
     return restored_outputs[selected_index], plot_outputs[selected_index]
 
 
-def process_batch(input_files, staged_paths, steps, cutoff_choice, batch_size, progress=gr.Progress()):
+def process_batch(input_files, staged_paths, steps, cutoff_choice, batch_size,
+                  split1_choice=None, split2_choice=None, progress=gr.Progress()):
     files = merge_input_sources(input_files, staged_paths)
     if not files:
         raise gr.Error(
@@ -470,6 +568,8 @@ def process_batch(input_files, staged_paths, steps, cutoff_choice, batch_size, p
         steps,
         cutoff_choice,
         batch_size,
+        split1_choice,
+        split2_choice,
         progress=progress,
     )
 
@@ -550,6 +650,27 @@ if __name__ == "__main__":
                     step=1,
                     label="Inference Batch Size",
                 )
+                _split1_choices = discover_checkpoints(0)
+                _split2_choices = discover_checkpoints(1)
+                gr.Markdown(
+                    "**Model** &mdash; both halves of the diffusion trajectory run "
+                    "on every restoration, so each is selected separately. "
+                    "Fine-tuned checkpoints are discovered in the fine-tuned folder.",
+                    elem_classes=["text-sm", "text-gray-500", "mb-1"],
+                )
+                split1_choice = gr.Dropdown(
+                    choices=_split1_choices,
+                    value=_split1_choices[0] if _split1_choices else None,
+                    label="Split 1 checkpoint (t 0.0-0.5, fine detail)",
+                    interactive=True,
+                )
+                split2_choice = gr.Dropdown(
+                    choices=_split2_choices,
+                    value=_split2_choices[0] if _split2_choices else None,
+                    label="Split 2 checkpoint (t 0.5-1.0, coarse structure)",
+                    interactive=True,
+                )
+                rescan_button = gr.Button("Rescan checkpoints")
                 run_button = gr.Button("Process Batch", variant="primary")
                 summary = gr.Markdown("No files processed yet.")
                 download_files = gr.Files(label="Download Restored Result(s)")
@@ -562,7 +683,8 @@ if __name__ == "__main__":
 
         run_button.click(
             fn=process_batch,
-            inputs=[input_files, staged_paths, steps, cutoff_choice, batch_size],
+            inputs=[input_files, staged_paths, steps, cutoff_choice, batch_size,
+                    split1_choice, split2_choice],
             outputs=[
                 download_files,
                 gallery,
@@ -573,6 +695,12 @@ if __name__ == "__main__":
                 preview_audio,
                 preview_plot,
             ],
+        )
+
+        rescan_button.click(
+            fn=refresh_checkpoint_choices,
+            inputs=[],
+            outputs=[split1_choice, split2_choice],
         )
 
         list_staged_button.click(

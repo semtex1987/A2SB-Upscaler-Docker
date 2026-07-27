@@ -42,12 +42,8 @@ RUN pip install --no-cache-dir --no-deps ssr_eval
 # 4. Create checkpoints directory
 RUN mkdir -p ckpts
 
-# 5. Download Checkpoints
-RUN wget -O ckpts/A2SB_twosplit_0.5_1.0_release.ckpt https://huggingface.co/nvidia/audio_to_audio_schrodinger_bridge/resolve/main/ckpt/A2SB_twosplit_0.5_1.0_release.ckpt
-RUN wget -O ckpts/A2SB_onesplit_0.0_1.0_release.ckpt https://huggingface.co/nvidia/audio_to_audio_schrodinger_bridge/resolve/main/ckpt/A2SB_onesplit_0.0_1.0_release.ckpt
-RUN wget -O ckpts/A2SB_twosplit_0.0_0.5_release.ckpt https://huggingface.co/nvidia/audio_to_audio_schrodinger_bridge/resolve/main/ckpt/A2SB_twosplit_0.0_0.5_release.ckpt
 
-# 6. Automate the Config Update
+# 5. Automate the Config Update
 # IMPORTANT: ensemble_2split_sampling expects the two split-domain checkpoints
 # (0.0-0.5 and 0.5-1.0). Using the one-split checkpoint here can leave the
 # upper split unmodeled, which manifests as zero-filled high-frequency bands.
@@ -64,7 +60,7 @@ RUN python3 -c "import yaml; \
     trainer['accelerator'] = 'gpu'; \
     yaml.dump(data, open(path, 'w'), default_flow_style=False, sort_keys=False)"
 
-# 7. Set Environment Variables
+# 6. Set Environment Variables
 ENV CUDA_VISIBLE_DEVICES=0 \
     MKL_THREADING_LAYER=GNU \
     SLURM_NODEID=0 \
@@ -74,7 +70,7 @@ ENV CUDA_VISIBLE_DEVICES=0 \
     SLURM_NTASKS=1 \
     PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 
-# 8. Create a non-root user and setup directories
+# 7. Create a non-root user and setup directories
 #    /debug is used by Lightning's CSVLogger as default_root_dir
 #    (set via ensembled_inference_api.py checkpoint_callback.dirpath).
 RUN useradd -m -u 1000 appuser && \
@@ -82,7 +78,7 @@ RUN useradd -m -u 1000 appuser && \
     chown -R appuser:appuser /app /debug && \
     chmod 1777 /debug
 
-# 9. Setup Entrypoint
+# 8. Setup Entrypoint
 # The entrypoint runs as root to fix bind-mount permissions on /app/outputs
 # and /app/inputs, then drops to appuser via runuser before exec'ing CMD.
 # update_ckpt_config.py switches to fine-tuned checkpoints if mounted at /app/ckpts/finetuned.
