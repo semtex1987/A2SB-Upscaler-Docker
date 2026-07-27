@@ -9,11 +9,27 @@ services:
     
     volumes:
       - ./restored_audio:/app/outputs
-      - ./training_output/checkpoints:/app/ckpts/finetuned:ro
+      # finetuned checkpoints are written inside the container (to /app/outputs/training)
+      # and activated in place; this mount is removed so training can write to that dir.
+      # If you want to mount pre-existing fine-tuned checkpoints from outside the container,
+      # add:  ./my_finetuned:/app/ckpts/finetuned:ro
+      - ./training_data:/app/training_data
     
     environment:
       - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
-    
+
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/healthz', timeout=5)"]
+      # The entrypoint downloads ~10 GB of checkpoints before the server binds.
+      start_period: 20m
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+    # Long-running GPU jobs are cancelled on shutdown; give the worker time to
+    # stop the inference subprocess before Docker sends SIGKILL.
+    stop_grace_period: 30s
+
     deploy:
       resources:
         reservations:

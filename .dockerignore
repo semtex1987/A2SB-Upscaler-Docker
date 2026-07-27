@@ -1,5 +1,9 @@
 .git
 .gitignore
+# The frontend is built inside the image; a host build tree would only
+# invalidate the layer cache and can carry a foreign-platform esbuild binary.
+web/node_modules/
+web/dist/
 __pycache__/
 *.pyc
 .pytest_cache/

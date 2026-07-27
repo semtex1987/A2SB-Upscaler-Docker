@@ -13,3 +13,4 @@ training_output/
 deploy.sh
 .cursor/*
 .claude/*
+dev/

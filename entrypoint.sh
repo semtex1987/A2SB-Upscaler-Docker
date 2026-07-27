@@ -9,9 +9,10 @@ wget -O /app/ckpts/A2SB_twosplit_0.0_0.5_release.ckpt https://huggingface.co/nvi
 python3 /app/update_ckpt_config.py || true
 
 # Bind-mounted volumes inherit host ownership, which may not match appuser
-# (UID 1000).  Fix at startup so the app can read/write both directories.
+# (UID 1000).  Fix at startup so the app can read/write all runtime directories.
 # /debug is Lightning's CSVLogger root_dir (set by ensembled_inference_api.py).
-if ! chown appuser:appuser /app/inputs /app/outputs /debug 2>/dev/null; then
+# /app/training_data is the user-supplied audio for fine-tuning.
+if ! chown appuser:appuser /app/inputs /app/outputs /app/training_data /debug 2>/dev/null; then
   echo "[entrypoint] Warning: could not chown one or more runtime directories; checking writability."
 fi
 
