@@ -75,7 +75,10 @@ EST_LOAD_SEC = 60.0    # matches estimate_true_sr() window in finetune.py
 ANALYSIS_SEC = 180.0   # window for the hf-edge spectral scan
 
 # --- authenticity-mode thresholds -----------------------------------------
-SHELF_DROP_DB = 40.0   # a drop steeper than this over ~1 kHz counts as a cliff
+SHELF_DROP_DB = 30.0   # a drop steeper than this over ~1 kHz counts as a cliff
+DEAD_PLATEAU_DB = 25.0 # how far the whole band above a cliff must sit below it
+SMOOTH_HZ = 430.0      # median window for the spectral envelope
+CONTENT_RANGE_DB = 60.0  # with no cliff, content counts down to this below peak
 DEAD_BAND_HZ = 2000    # a cliff this far below Nyquist means an artificial LPF
 HIRATE_HZ = 96000      # above this, ultrasonic band may be DSD hash -> CHECK
 UPSAMPLE_CUTOFF_HZ = 24000  # a cliff at/under this in a >48 kHz file = upsample
@@ -112,14 +115,30 @@ def estimate_true_sr(y, sr, np, librosa) -> tuple[int, float]:
     return int(min(2 * rolloff, 44100)), rolloff
 
 
+def median_smooth(values, np, window):
+    """Running median with edge padding.  Kept in sync with server/analysis.py."""
+    if window <= 1 or values.size < window:
+        return values
+    half = window // 2
+    padded = np.pad(values, half, mode="edge")
+    return np.median(np.lib.stride_tricks.sliding_window_view(padded, window), axis=-1)
+
+
 def spectral_scan(y, sr, np, librosa) -> tuple[float, bool]:
     """Highest frequency carrying real energy, and whether the spectrum cliffs
     there (brickwall = artificial-lowpass signature).
 
-    The edge is taken from the 95th-PERCENTILE-over-time spectrum rather than the
-    mean: transient HF (pick attacks, brushes, cymbals) is intermittent and a
-    mean spectrum averages it below the noise floor, which unfairly rejects
-    sparse acoustic material.  The percentile keeps that energy visible.
+    The scan looks for a cliff first and only falls back to a level threshold
+    when there is none.  Thresholding first does not work: a level-based floor
+    assumes the dead band is the quietest part of the spectrum, which holds for
+    a transcode but not for ordinary material whose spectrum already slopes
+    60 dB from bass to Nyquist.  Against real music that approach places the
+    "edge" somewhere in the mid-band.
+
+    The spectrum is the 95th-PERCENTILE-over-time rather than the mean:
+    transient HF (pick attacks, brushes, cymbals) is intermittent and a mean
+    spectrum averages it below the noise floor, which unfairly rejects sparse
+    acoustic material.  The percentile keeps that energy visible.
     """
     n_fft = 4096
     spec = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=1024))
@@ -130,23 +149,34 @@ def spectral_scan(y, sr, np, librosa) -> tuple[float, bool]:
         return 0.0, False
     p95_db = 20.0 * np.log10(np.maximum(p95 / peak, 1e-12))
 
-    # Adaptive floor: the file's own quietest bins. Above an artificial cutoff
-    # the dead region sits at this floor; in a genuine file HF energy stays above
-    # it toward Nyquist.
-    floor = float(np.percentile(p95_db, 10))
-    above = np.where(p95_db > floor + 6.0)[0]
+    bin_width = sr / n_fft
+    # Median rather than mean: a dead band is not silent, it is dither and
+    # coding noise whose per-bin level swings +/-10 dB.  A mean smooths that
+    # into a slope; a median flattens it into the plateau the cliff test needs.
+    curve = median_smooth(p95_db, np, max(3, int(round(SMOOTH_HZ / bin_width)) | 1))
+
+    look = max(1, int(round(500.0 / bin_width)))  # ~500 Hz each side
+    start_bin = int(3000.0 / bin_width)
+    if curve.size > 2 * look + 1 and start_bin < curve.size - 2 * look:
+        drops = curve[: -2 * look] - curve[2 * look :]
+        offset = int(np.argmax(drops[start_bin:])) + start_bin
+        cliff_bin, cliff_drop = offset + look, float(drops[offset])
+
+        if cliff_drop > SHELF_DROP_DB:
+            pre = float(np.median(curve[max(0, cliff_bin - 3 * look) : cliff_bin - look + 1]))
+            post = float(np.median(curve[min(curve.size - 1, cliff_bin + look) :]))
+            # Everything above the cliff must stay down, so that a local dip
+            # (a notch, a crossover null) does not read as a brickwall.
+            if pre - post > DEAD_PLATEAU_DB:
+                shoulder = np.where(curve[: cliff_bin + 1] >= pre - 6.0)[0]
+                edge_bin = int(shoulder.max()) if len(shoulder) else cliff_bin
+                return float(freqs[edge_bin]), True
+
+    # No cliff: report where content fades out relative to the loudest band.
+    above = np.where(curve > curve.max() - CONTENT_RANGE_DB)[0]
     if len(above) == 0:
         return 0.0, False
-    edge_bin = int(above.max())
-    edge_hz = float(freqs[edge_bin])
-
-    # Steep-cliff (brickwall) check around the edge.
-    bin_width = sr / n_fft
-    look = max(1, int(round(500.0 / bin_width)))  # ~500 Hz each side
-    lo = max(0, edge_bin - look)
-    hi = min(len(p95_db) - 1, edge_bin + look)
-    drop = float(p95_db[lo] - p95_db[hi])
-    return edge_hz, drop > SHELF_DROP_DB
+    return float(freqs[int(above.max())]), False
 
 
 def classify(sr, est_sr, edge_hz, shelf, strict) -> tuple[str, str]:
