@@ -1,8 +1,17 @@
 # A2SB Fine-Tuning
 
-Drop high-quality, genuinely full-bandwidth audio into `training_data/`, vet it, then run the trainer to fine-tune both A2SB splits. Fine-tuned checkpoints are written to `training_output/checkpoints/` and are picked up by the inference container when present.
+Drop high-quality, genuinely full-bandwidth audio into `training_data/`, vet it, then run the trainer to fine-tune both A2SB splits.
 
-## Quick start
+## Quick start — via the Train tab (no separate container needed)
+
+The web UI's **Train** tab is the easiest path and does not require a second Docker container.
+
+1. Put audio files in `training_data/` (at repo root — bind-mounted to `/app/training_data`).
+2. Open the Train tab, enter the directory path, and click **Scan & vet**.
+3. Review the PASS/CHECK/REJECT breakdown, configure steps and batch size, then click **Start fine-tuning**.
+4. When training completes, click **Activate fine-tuned** — no container restart needed.
+
+## Quick start — via CLI (separate training container)
 
 1. Put audio files in `training_data/` (at repo root).
 2. (Optional but recommended) Vet the dataset — see [Dataset vetting](#dataset-vetting).
@@ -13,7 +22,7 @@ Drop high-quality, genuinely full-bandwidth audio into `training_data/`, vet it,
      python /app/training/finetune.py --steps 5000
    ```
 
-4. Restart the inference container to use the new checkpoints:
+4. Use the Train tab's **Activate fine-tuned** button to activate the checkpoints in the running inference container, or restart:
 
    ```bash
    docker compose down && docker compose up -d
