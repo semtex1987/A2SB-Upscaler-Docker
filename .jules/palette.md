@@ -6,3 +6,7 @@
 ## 2026-07-26 - Contextual Instruction Pattern
 **Learning:** Users tend to ignore "walls of text" at the top of Gradio applications. Moving global instructions into localized component `info` properties places guidance exactly where users make decisions, significantly improving task completion and reducing confusion.
 **Action:** Always distribute global instructions into local component `info` properties rather than piling them in a single block at the top of the interface.
+
+## 2026-07-28 - Expand File Selection Click Targets
+**Learning:** In list views where users select items via checkboxes (like StageView file staging), the default checkbox click target (16x16px) is too small, slowing down bulk operations and violating Fitts's Law. Wrapping the entire row description in a `<label htmlFor={id}>` expands the hit area to the full row contents without requiring custom JS click handlers.
+**Action:** Whenever a checkbox is the primary action for a list row, wrap the adjacent row content in a linked `<label>` with `cursor-pointer` to dramatically improve ease of selection.
