@@ -62,7 +62,8 @@ def ensure_a2sb_input_format(segment: AudioSegment) -> AudioSegment:
 def high_band_rms_db(path: str, cutoff_hz: float) -> float:
     """RMS level (ref=1.0 full scale) of content at or above `cutoff_hz`."""
     y, sr = librosa.load(path, sr=None)
-    spec = np.abs(librosa.stft(y, n_fft=2048, hop_length=512))
+    # ⚡ Bolt: Use 50% overlap (hop_length=n_fft//2) instead of 75% for ~2x speedup on heuristics
+    spec = np.abs(librosa.stft(y, n_fft=2048, hop_length=1024))
     freqs = librosa.fft_frequencies(sr=sr, n_fft=2048)
     band = spec[freqs >= cutoff_hz, :]
     if band.size == 0:
