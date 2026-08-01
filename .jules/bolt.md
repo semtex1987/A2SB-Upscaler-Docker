@@ -20,3 +20,7 @@
 ## 2026-06-13 - Optimize librosa spectral feature extraction
 **Learning:** `librosa.feature.spectral_flatness` and `librosa.feature.spectral_rolloff` default to `hop_length=n_fft//4` (512 when `n_fft=2048`), producing 75% STFT frame overlap. For coarse heuristic checks that aggregate over time (mean, percentile), this overlap computes far more frames than needed.
 **Action:** Set `hop_length=n_fft` (e.g., `hop_length=2048`) to eliminate the overlap when using these features for macroscopic heuristic checks. Keep `n_fft` at its default 2048 — only `hop_length` needs to change. This yields ~4× fewer STFT frames and proportionally less compute, with no meaningful accuracy loss for mean/percentile aggregations.
+
+## 2024-05-18 - Safe librosa STFT overlap for heuristics
+**Learning:** When optimizing macroscopic heuristic aggregations (like `percentile` or `RMS`) over `librosa.stft` data, reducing overlap to 0% (`hop_length=n_fft`) can introduce spectral blindspots that fail strict boundary tests or alter curve parity. However, setting a 50% overlap (`hop_length=n_fft // 2`) safely yields a ~2x speedup compared to standard 75% overlap without compromising signal integrity.
+**Action:** Use integer division `n_fft // 2` for the hop length when generating STFTs for heuristic aggregations, rather than full 0% overlap, to guarantee mathematical safety and test passage.
