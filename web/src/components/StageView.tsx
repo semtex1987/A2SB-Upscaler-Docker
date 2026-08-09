@@ -328,15 +328,16 @@ function StagedFileRow({
     <li className="rounded-lg border border-stroke bg-canvas">
       <div className="flex items-start gap-3 px-4 py-3">
         <input
+          id={`select-${file.id}`}
           type="checkbox"
           checked={file.selected}
           onChange={(event) => onChange({ ...file, selected: event.target.checked })}
           aria-label={`Include ${file.name}`}
           className="mt-1 size-4 shrink-0 cursor-pointer accent-[var(--color-accent)]"
         />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="truncate font-medium text-ink">{file.name}</p>
+        <label htmlFor={`select-${file.id}`} className="min-w-0 flex-1 cursor-pointer">
+          <span className="flex flex-wrap items-center gap-2">
+            <strong className="truncate font-medium text-ink">{file.name}</strong>
             <Badge tone={verdict.tone}>{verdict.label}</Badge>
             {file.shelf ? (
               <Badge tone="caution">
@@ -344,19 +345,19 @@ function StagedFileRow({
                 Brickwall
               </Badge>
             ) : null}
-          </div>
+          </span>
           {showPath ? (
-            <p className="mt-0.5 truncate font-mono text-xs text-ink-faint" title={file.path}>
+            <span className="mt-0.5 block truncate font-mono text-xs text-ink-faint" title={file.path}>
               {file.path}
-            </p>
+            </span>
           ) : null}
-          <p className="mt-1 font-mono text-xs text-ink-muted tnum">
+          <span className="mt-1 block font-mono text-xs text-ink-muted tnum">
             {formatDuration(file.durationSec)} · {(file.sampleRate / 1000).toFixed(1)} kHz ·{" "}
             {file.channels === 2 ? "stereo" : "mono"} · {formatBytes(file.sizeBytes)} · content to{" "}
             {formatHz(file.hfEdgeHz)}
-          </p>
-          <p className="mt-1.5 text-xs leading-relaxed text-ink-muted">{file.note}</p>
-        </div>
+          </span>
+          <span className="mt-1.5 block text-xs leading-relaxed text-ink-muted">{file.note}</span>
+        </label>
         <Button variant="ghost" size="icon" aria-label={`Remove ${file.name}`} onClick={onRemove}>
           <Trash2 className="size-4" aria-hidden />
         </Button>
