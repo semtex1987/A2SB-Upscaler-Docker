@@ -12,6 +12,17 @@ from torch import Tensor
 from typing import List, Optional, Tuple, Union
 
 
+from audio_transforms.transforms import apply_audio_transforms
+
+def vocode_stft(spec_out, inv_transforms):
+    """
+    spec_out: B x C x H x W model outputs to be mapped back to waveform
+    inv_transforms: List of audio transforms to invert the spectrogram
+    """
+    # assume transforms don't support batch dimension for now
+    return [apply_audio_transforms(spec_out[b], inv_transforms)[0] for b in range(spec_out.shape[0])]
+
+
 def radian_to_SO2(rads: torch.Tensor):
     """
     converts tensor of radians to tensor of SO(2) matrices

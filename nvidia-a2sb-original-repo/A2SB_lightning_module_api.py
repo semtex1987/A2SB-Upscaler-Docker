@@ -18,7 +18,7 @@ from networks import SinusoidalTemporalEmbedding
 from plotting_utils import plot_spec_to_numpy
 import torchaudio
 import inspect
-from audio_utils import phase_channels_to_R, stft_mag_R_to_wav, phase_R_to_channels
+from audio_utils import phase_channels_to_R, stft_mag_R_to_wav, phase_R_to_channels, vocode_stft
 from audio_transforms.transforms import apply_audio_transforms
 import ssr_eval
 from collections import defaultdict, OrderedDict
@@ -93,15 +93,6 @@ class TimePartitionedPretrainedSTFTBridgeModel(LightningModule):
             if t >= thresh:
                 model_idx = idx + 1
         return self.t_bounded_pretrained_models[model_idx]
-
-    @torch.no_grad()
-    def vocode_stft(self, spec_out):
-        """
-        # TODO move this outside of lightningmodule
-        spec_out: B x C x H x W model outputs to be mapped back to waveform
-        """
-        # assume transforms don't support batch dimension for now
-        return [apply_audio_transforms(spec_out[b], self.inv_transforms)[0] for b in range(spec_out.shape[0])]
 
     @torch.no_grad()
     def ddpm_sample(self, x_1, t_steps=None, mask=None, mask_pred_x0=True,
@@ -212,8 +203,8 @@ class TimePartitionedPretrainedSTFTBridgeModel(LightningModule):
                                     mask_pred_x0=True, win_length=self.predict_win_length, hop_length=self.predict_hop_length,
                                     batch_size=self.predict_batch_size)
 
-        reconstructed_audio = self.vocode_stft(x_0s[-1].cpu())[0].cpu().data.numpy()
-        input_audio = self.vocode_stft(x_0_corrupted.cpu())[0].cpu().data.numpy()
+        reconstructed_audio = vocode_stft(x_0s[-1].cpu(), self.inv_transforms)[0].cpu().data.numpy()
+        input_audio = vocode_stft(x_0_corrupted.cpu(), self.inv_transforms)[0].cpu().data.numpy()
         # scipy infers the WAV encoding from the array dtype; writing float32
         # yields a 32-bit float WAV (2x the size of the 16-bit source) that the
         # downstream pydub/ffmpeg re-export preserves. Emit 16-bit PCM instead.
@@ -378,14 +369,6 @@ class STFTBridgeModel(LightningModule):
             x_t = x_t_prev
         return all_pred_x0s
     
-    def vocode_stft(self, spec_out):
-        """
-        # TODO move this outside of lightningmodule
-        spec_out: B x C x H x W model outputs to be mapped back to waveform
-        """
-        # assume transforms don't support batch dimension for now
-        return [apply_audio_transforms(spec_out[b], self.inv_transforms)[0] for b in range(spec_out.shape[0])]
-    
     def sample_t_bounded(self, n_samples):
         t_range = self.train_t_max - self.train_t_min
         return torch.rand(n_samples) * t_range + self.train_t_min
@@ -430,7 +413,7 @@ class STFTBridgeModel(LightningModule):
         t_steps = torch.linspace(1, 1.0/n_steps, int(n_steps)).unsqueeze(0).to(x_0_corrupted.device)
 
         x_0s = self.ddpm_sample(x_0_corrupted, t_steps=t_steps, mask=loss_mask, mask_pred_x0=True)
-        inpainted_audio = self.vocode_stft(x_0s[-1].cpu())
+        inpainted_audio = vocode_stft(x_0s[-1].cpu(), self.inv_transforms)
         metrics = ssr_eval.metrics.AudioMetrics(rate=self.sampling_rate)
 
         self.test_results[dataloader_idx].extend(
@@ -476,7 +459,7 @@ class STFTBridgeModel(LightningModule):
             t_steps = torch.linspace(1, 1.0/n_steps, int(n_steps)).unsqueeze(0).to(x_0_corrupted.device)
 
             x_0s = self.ddpm_sample(x_0_corrupted, t_steps=t_steps, mask=loss_mask, mask_pred_x0=True)
-            inpainted_audio = self.vocode_stft(x_0s[-1].cpu())
+            inpainted_audio = vocode_stft(x_0s[-1].cpu(), self.inv_transforms)
             metrics = ssr_eval.metrics.AudioMetrics(rate=self.sampling_rate)
             results = []
             for idx in range(n_samples):
@@ -522,7 +505,7 @@ class LogValidationInpaintingSTFTCallback(Callback):
                 x_0_clean_mag = pl_module.inv_transforms[0](self.get_mag(x_0_clean))
                 mask = sample['loss_mask'].unsqueeze(0).to(pl_module.device)
                 # print('DEBUG: x_0_clean.shape', x_0_clean.shape)  # [1, 3, 1024, 256]
-                gt_reconstruction = pl_module.vocode_stft(x_0_clean.unsqueeze(0).cpu())
+                gt_reconstruction = vocode_stft(x_0_clean.unsqueeze(0).cpu(), pl_module.inv_transforms)
 
                 pl_module.logger.experiment.add_audio(sample_id + "Original Audio",
                                                       gt_reconstruction[0].data.numpy(), pl_module.global_step,
@@ -543,7 +526,7 @@ class LogValidationInpaintingSTFTCallback(Callback):
                 pl_module.logger.experiment.add_image(sample_id + "Inpainted Magnitude",
                                                       plot_spec_to_numpy(sampled_spec_mag.data.cpu().numpy()),
                                                       pl_module.global_step, dataformats="HWC")
-                inpainted_audio = pl_module.vocode_stft(sampled_spec[0:1].cpu())
+                inpainted_audio = vocode_stft(sampled_spec[0:1].cpu(), pl_module.inv_transforms)
                 pl_module.logger.experiment.add_audio(sample_id + "Inpainted Audio",
                                                       inpainted_audio[0].data.numpy(), pl_module.global_step,
                                                       pl_module.sampling_rate)
