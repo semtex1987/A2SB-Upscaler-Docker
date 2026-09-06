@@ -66,12 +66,14 @@ def save_yaml(data, prefix="../configs/temp"):
     return file_name
 
 
-def shell_run_cmd(cmd):
+def shell_run_cmd(cmd, cwd=None):
     print('running:', cmd)
-    p = Popen(cmd, stdout=PIPE, stderr=PIPE, shell=True)
+    p = Popen(cmd, stdout=PIPE, stderr=PIPE, shell=False, cwd=cwd)
     stdout, stderr = p.communicate()
-    print(stdout)
-    print(stderr)
+    if stdout:
+        print(stdout.decode('utf-8', errors='replace'))
+    if stderr:
+        print(stderr.decode('utf-8', errors='replace'))
 
 
 def upsample_one_sample(dataset_name, audio_filename, exp_root, exp_name, cutoff_freq):
@@ -106,13 +108,13 @@ def upsample_one_sample(dataset_name, audio_filename, exp_root, exp_name, cutoff
 
     # run upsampling command
     if not os.path.exists(os.path.join(output_dir, output_subdir, 'recon.wav')):
-        cmd = "cd ../; \
-            python ensembled_inference.py predict \
-                -c configs/{}.yaml \
-                -c {} \
-                --model.predict_output_dir={}; \
-            cd inference/".format(exp_name, temporary_yaml_file.replace('../', ''), output_dir)
-        shell_run_cmd(cmd)
+        cmd = [
+            "python", "ensembled_inference.py", "predict",
+            "-c", f"configs/{exp_name}.yaml",
+            "-c", temporary_yaml_file.replace('../', ''),
+            f"--model.predict_output_dir={output_dir}"
+        ]
+        shell_run_cmd(cmd, cwd="..")
     else:
         print(audio_filename, ' - already upsampled')
     
