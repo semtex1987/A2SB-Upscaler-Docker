@@ -67,9 +67,9 @@ def save_yaml(data, prefix="../configs/temp"):
     return file_name
 
 
-def shell_run_cmd(cmd):
+def shell_run_cmd(cmd, cwd=None):
     print('running:', cmd)
-    p = Popen(cmd, stdout=PIPE, stderr=PIPE, shell=True)
+    p = Popen(cmd, stdout=PIPE, stderr=PIPE, shell=False, cwd=cwd)
     stdout, stderr = p.communicate()
     print(stdout)
     print(stderr)
@@ -159,16 +159,16 @@ def inpaint_one_sample(dataset_name, audio_filename, exp_root, exp_name, inpaint
     sf.write(os.path.join(output_dir, output_subdir, 'degraded.{}'.format(audio_suffix)), degraded_audio, orig_sr)
 
     # run inpainting command
-    cmd = "cd ../; \
-        python ensembled_inference.py predict \
-            -c configs/{}.yaml \
-            -c {} \
-            --model.fast_inpaint_mode=true \
-            --model.predict_n_steps=200 \
-            --model.predict_output_dir={}; \
-        cd inference/".format(exp_name, temporary_yaml_file.replace('../', ''), output_dir)
+    cmd = [
+        "python", "ensembled_inference.py", "predict",
+        "-c", f"configs/{exp_name}.yaml",
+        "-c", temporary_yaml_file.replace('../', ''),
+        "--model.fast_inpaint_mode=true",
+        "--model.predict_n_steps=200",
+        f"--model.predict_output_dir={output_dir}"
+    ]
     
-    shell_run_cmd(cmd)
+    shell_run_cmd(cmd, cwd="../")
     
     os.remove(temporary_yaml_file)
 
