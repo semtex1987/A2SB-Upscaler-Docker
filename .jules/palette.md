@@ -6,3 +6,6 @@
 ## 2026-07-26 - Contextual Instruction Pattern
 **Learning:** Users tend to ignore "walls of text" at the top of Gradio applications. Moving global instructions into localized component `info` properties places guidance exactly where users make decisions, significantly improving task completion and reducing confusion.
 **Action:** Always distribute global instructions into local component `info` properties rather than piling them in a single block at the top of the interface.
+## 2026-07-27 - Fitts's Law on List Item Selections
+**Learning:** In list views where users select items via checkboxes, the default 16x16px click target violates Fitts's Law and frustrates users. Wrapping the adjacent row content (converted strictly to phrasing elements like `span` for semantic validity) in a `<label>` expands the hit area naturally.
+**Action:** Always wrap the adjacent row content in a `<label htmlFor={id}>` with `cursor-pointer` when providing checkbox selection in lists.
