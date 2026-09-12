@@ -327,36 +327,38 @@ function StagedFileRow({
   return (
     <li className="rounded-lg border border-stroke bg-canvas">
       <div className="flex items-start gap-3 px-4 py-3">
-        <input
-          type="checkbox"
-          checked={file.selected}
-          onChange={(event) => onChange({ ...file, selected: event.target.checked })}
-          aria-label={`Include ${file.name}`}
-          className="mt-1 size-4 shrink-0 cursor-pointer accent-[var(--color-accent)]"
-        />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="truncate font-medium text-ink">{file.name}</p>
-            <Badge tone={verdict.tone}>{verdict.label}</Badge>
-            {file.shelf ? (
-              <Badge tone="caution">
-                <AlertTriangle className="size-3" aria-hidden />
-                Brickwall
-              </Badge>
+        <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-3">
+          <input
+            type="checkbox"
+            checked={file.selected}
+            onChange={(event) => onChange({ ...file, selected: event.target.checked })}
+            aria-label={`Include ${file.name}`}
+            className="mt-1 size-4 shrink-0 cursor-pointer accent-[var(--color-accent)]"
+          />
+          <span className="min-w-0 flex-1">
+            <span className="flex flex-wrap items-center gap-2">
+              <span className="block truncate font-medium text-ink">{file.name}</span>
+              <Badge tone={verdict.tone}>{verdict.label}</Badge>
+              {file.shelf ? (
+                <Badge tone="caution">
+                  <AlertTriangle className="size-3" aria-hidden />
+                  Brickwall
+                </Badge>
+              ) : null}
+            </span>
+            {showPath ? (
+              <span className="mt-0.5 block truncate font-mono text-xs text-ink-faint" title={file.path}>
+                {file.path}
+              </span>
             ) : null}
-          </div>
-          {showPath ? (
-            <p className="mt-0.5 truncate font-mono text-xs text-ink-faint" title={file.path}>
-              {file.path}
-            </p>
-          ) : null}
-          <p className="mt-1 font-mono text-xs text-ink-muted tnum">
-            {formatDuration(file.durationSec)} · {(file.sampleRate / 1000).toFixed(1)} kHz ·{" "}
-            {file.channels === 2 ? "stereo" : "mono"} · {formatBytes(file.sizeBytes)} · content to{" "}
-            {formatHz(file.hfEdgeHz)}
-          </p>
-          <p className="mt-1.5 text-xs leading-relaxed text-ink-muted">{file.note}</p>
-        </div>
+            <span className="mt-1 block font-mono text-xs text-ink-muted tnum">
+              {formatDuration(file.durationSec)} · {(file.sampleRate / 1000).toFixed(1)} kHz ·{" "}
+              {file.channels === 2 ? "stereo" : "mono"} · {formatBytes(file.sizeBytes)} · content to{" "}
+              {formatHz(file.hfEdgeHz)}
+            </span>
+            <span className="mt-1.5 block text-xs leading-relaxed text-ink-muted">{file.note}</span>
+          </span>
+        </label>
         <Button variant="ghost" size="icon" aria-label={`Remove ${file.name}`} onClick={onRemove}>
           <Trash2 className="size-4" aria-hidden />
         </Button>
