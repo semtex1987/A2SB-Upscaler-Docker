@@ -14,3 +14,6 @@ deploy.sh
 .cursor/*
 .claude/*
 dev/
+
+# OpenMemory - IDE/Assistant specific rules
+.cursor/rules/openmemory.mdc

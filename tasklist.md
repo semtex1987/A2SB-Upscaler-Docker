@@ -1,0 +1,212 @@
+# A2SB Docker and GUI audit — 2026-09-11
+
+Reviewed revision: `2236d51d767a2705e1fb6d411ad7e48cf655c58f`.
+
+This is a source and CPU audit of the restoration pipeline, server/API, queue and persistence, React interface, training orchestration, reachable vendored model/data code, Docker/startup scripts, configuration, tests, and documentation. Runtime code has not been changed. This is not a claim that every execution path has been exercised.
+
+Validation: all **128 existing tests passed** with a canonical temporary-directory path; the GUI passed TypeScript checking and its production Vite build. Targeted CPU reproductions below exercised real functions, with mocked inference where GPU weights would otherwise be needed. PyTorch 2.1 and Lightning 2.5 were installed in an isolated Python 3.10 environment to check compatibility. The local GUI build used host Node 26 rather than Docker's Node 22. Docker/GPU inference, a real training run, and browser listening comparisons were not performed: the Docker daemon was unavailable and this host has no NVIDIA GPU.
+
+**Priority:** P1 = address before relying on the affected workflow; P2 = correctness/reliability issue for the stated input or condition. “Reproduced” means a targeted execution reproduced the failure; “source-confirmed” means the control/data flow establishes the issue but its complete user workflow was not executed.
+
+## First sweep: blockers and data integrity
+
+### 1. P1 — Pinned optimizer API prevents training from starting
+
+- [x] Fix [A2SB_lightning_module.py:240](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/nvidia-a2sb-original-repo/A2SB_lightning_module.py:240), and the duplicate implementation in `A2SB_lightning_module_api.py`.
+- **Reproduced:** `configure_optimizers()` raises `TypeError: RAdam.__init__() got an unexpected keyword argument 'decoupled_weight_decay'` under the Docker-pinned PyTorch 2.1. This affects training, not the normal ensemble inference path.
+- Choose an optimizer supported by the pinned stack, preserving the intended weight-decay behavior, or upgrade the whole compatible CUDA/PyTorch stack. Add a small real optimizer-construction test.
+
+### 2. P1 — GUI training supplies an invalid CSV logger configuration
+
+- [x] Fix [server/training.py:273](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/server/training.py:273).
+- **Reproduced with Lightning's Trainer argument parser:** `--trainer.logger=CSVLogger` fails because `CSVLogger.save_dir` is required. Setting `trainer.default_root_dir` does not supply the logger constructor's missing argument.
+- Pass an explicit logger class and `init_args.save_dir` associated with the split output directory. Test parsing the exact GUI-generated training arguments. This can fail before the optimizer issue above is reached.
+
+### 3. P1 — Training exports and GUI activation disagree on checkpoint location
+
+- [x] Unify [training/finetune.py:639](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/training/finetune.py:639), [server/config.py:70](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/server/config.py:70), and [server/training.py:383](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/server/training.py:383).
+- **Source-confirmed:** GUI jobs write under `/app/outputs/training/checkpoints`; status/activation look under `/app/ckpts/finetuned` by default. Successful training therefore does not make its new checkpoints available to the default activation flow.
+- Use one artifact registry/path, persist it, and test training-output discovery through activation rather than testing each function with an independently supplied directory.
+
+### 4. P1 — Input downsampling introduces aliases
+
+- [x] Replace the conversion in [server/audio.py:59](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/server/audio.py:59).
+- **Reproduced:** pydub's frame-rate conversion mapped a 30 kHz tone in 96 kHz audio into a 14.1 kHz tone at about −11.7 dBFS RMS. A 23 kHz tone at 48 kHz became 21.1 kHz. The later low-pass cannot remove an alias that has already landed below its cutoff.
+- Use a band-limited resampler before PCM conversion, preferably keeping float intermediates. Test above-target-Nyquist rejection as well as duration and stereo alignment.
+
+### 5. P1 — Same-name uploads overwrite one another
+
+- [x] Fix [server/api.py:157](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/server/api.py:157).
+- **Reproduced:** two uploads named `same.wav` in one request receive the identical destination path; the later write replaces the earlier input. Earlier analysis can then describe different bytes from those eventually processed.
+- Give every uploaded file its own identifier/storage path. Preserve the original filename only as a display label. Test duplicate multipart filenames.
+
+### 6. P1 — Distinct batch entries can overwrite restored results
+
+- [x] Fix [server/jobs.py:390](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/server/jobs.py:390).
+- **Reproduced:** different source directories containing `same.wav` resolve to the same per-file run directory and output. Extension differences and replacing spaces with underscores create more collisions. Earlier history entries can silently point to a later file's audio.
+- Use an immutable per-entry identifier for directories and output ownership, with a validated display name. Test equal basenames, equal stems with different extensions, and names that normalize identically.
+
+## Training correctness and checkpoint lifecycle
+
+### 7. P2 — Gradient clipping mutates accumulated gradients before backward
+
+- [x] Remove the mutating clip from [A2SB_lightning_module.py:406](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/nvidia-a2sb-original-repo/A2SB_lightning_module.py:406), including its duplicate.
+- **Reproduced:** calling the actual training-step logic changed an existing gradient from 2 to approximately 0.5 before the current loss's backward pass. With `accumulate_grad_batches: 4`, this repeatedly clips earlier partial gradients; Lightning also clips at the proper update boundary. The logged norm is not the norm of the current completed update.
+- Let Lightning perform the configured clipping. Measure norms in the appropriate backward/optimizer hook. Compare one accumulated update against a mathematically equivalent full batch.
+
+### 8. P2 — Dataset vetting and manifest counts disagree with the actual loader
+
+- [x] Align [server/training.py:92](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/server/training.py:92), [training/finetune.py:128](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/training/finetune.py:128), and [datasets.py:62](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/nvidia-a2sb-original-repo/datasets/datasets.py:62).
+- **Reproduced:** a tone with faint broadband content passed GUI vetting, but the training estimator assigned about 2,153 Hz and the loader discarded it. A small fixture was reported as two training files/one validation file and two training segments, yet the resulting training dataset had zero samples.
+- Eligibility must be resolved before splitting/counting. Use the same eligibility result in the GUI, manifest, and loader; check nonempty train/validation loaders and calculate validation cadence from the actual loader.
+
+### 9. P2 — Export can label an untrained starting checkpoint as fine-tuned
+
+- [x] Tighten [training/finetune.py:341](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/training/finetune.py:341).
+- **Reproduced:** when a split directory contains only `finetune_start.ckpt`, `copy_final_checkpoints()` exports it successfully under the final fine-tuned filename. The export search does not make the exclusion used by resume selection.
+- Exclude initialization checkpoints, require provenance and an appropriate completed step, and explicitly save/export the terminal training state. Test a run stopping before the first periodic checkpoint and a folder containing only initialization or stale artifacts.
+
+### 10. P2 — A new GUI training job can silently resume an unrelated earlier job
+
+- [x] Separate job outputs in [server/api.py:461](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/server/api.py:461) and make resume explicit in [training/finetune.py:583](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/training/finetune.py:583).
+- **Source-confirmed:** GUI jobs share the same output directory while the runner automatically finds an existing checkpoint. Changing the dataset does not establish a new run. `--steps` is an absolute target; if the old checkpoint is already there, the new request can perform no additional updates.
+- Allocate run-specific outputs and offer explicit resume against a selected run. Record dataset/config/checkpoint identities and distinguish total target steps from additional steps.
+
+### 11. P2 — Activating weights can change the model halfway through a stereo file
+
+- [x] Coordinate [server/training.py:422](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/server/training.py:422) with restoration job execution.
+- **Source-confirmed race:** activation/reversion rewrites the shared inference configuration, while L and R start separate model processes. An activation between those starts can restore the two channels with different weights. Concurrent configuration reads also need atomic writes.
+- Snapshot the checkpoint/config selection per job and use atomic configuration replacement. Apply changes at a defined job boundary and retain the selected model identity in history.
+
+### 12. P2 — Multi-GPU training disables automatic data sharding
+
+- [x] Reconcile `use_distributed_sampler: false` in [finetune_split1.yaml:36](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/training/configs/finetune_split1.yaml:36) and split 2 with the advertised multi-device runner.
+- **Source-confirmed configuration issue:** selecting DDP does not add a distributed sampler to the ordinary loader when Lightning's replacement is disabled. Ranks traverse overlapping/full datasets instead of the intended partition.
+- Enable/configure sharding and recompute per-rank loader lengths and validation scheduling. Verify distinct sample indices in a small two-process smoke test.
+
+## Audio edge cases and measurement accuracy
+
+### 13. P2 — Short input padding can still leave the tensor shorter than its window
+
+- [x] Fix [diffusion.py:75](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/nvidia-a2sb-original-repo/diffusion.py:75).
+- **Reproduced:** an 87-frame input needing a 256-frame window receives only 87 extra frames because padding slices the input once. Its resulting width is 174, and the subsequent unfold fails.
+- Pad to the exact required length, consistently handling masks and final trimming. Test sub-second/one-second clips and inputs shorter than the STFT reflection-padding requirement.
+
+### 14. P2 — Reconstruction drops the non-hop-aligned tail
+
+- [x] Carry original sample lengths through [transforms.py:177](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/nvidia-a2sb-original-repo/audio_transforms/transforms.py:177).
+- **Reproduced:** a 44,100-sample signal reconstructed to 44,032 samples. The inverse has no requested `length`; with the current 512-sample hop, up to 511 tail samples can be omitted.
+- Request the original length during inverse STFT and verify exact output length/alignment across both channels and resampling.
+
+### 15. P2 — Valid quiet or silent channels are classified as broken audio
+
+- [x] Revise [server/audio.py:74](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/server/audio.py:74).
+- **Reproduced:** a valid low-level sine was rejected by the absolute approximately −60 dBFS RMS threshold. Silence always fails. A legitimate silent channel in hard-panned audio therefore can fail the whole stereo restoration; a future M/S implementation would hit this on a zero side channel too.
+- Separate structural decoding failures from content heuristics. Bypass silent channels and compare suspicious outputs with the corresponding input. Treat noise-like content carefully rather than automatically assuming it is failed synthesis.
+
+### 16. P2 — The “HF RMS dB” measurement is neither calibrated dBFS nor stereo-aware
+
+- [x] Correct [server/audio.py:62](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/server/audio.py:62) and associated GUI labels/interpretation.
+- **Reproduced:** a 0.5-amplitude 15 kHz sine measured approximately **+24.15 dB**, though its waveform RMS is **−9.03 dBFS**. The calculation uses unnormalized STFT magnitudes. Librosa's default mono loading also cancels pure side content.
+- Measure calibrated high-band power per channel and combine powers, optionally reporting M and S separately. Added HF energy is not itself evidence of restoration quality; noise also raises it. Validate against known-amplitude tones and anti-phase stereo.
+
+### 17. P2 — Spectrograms hide level differences and render silence at maximum intensity
+
+- [x] Correct [server/analysis.py:248](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/server/analysis.py:248).
+- **Reproduced:** the silence image consists entirely of intensity 255. `ref=np.max` normalizes each file independently, so uniform attenuation is also invisible between comparison panels.
+- Use a calibrated or shared reference for comparisons, explicitly floor silence, and preserve stereo information where the visualization claims to describe the stereo result.
+
+### 18. P2 — The pipeline does not preserve the original known band exactly
+
+- [x] Review [server/audio.py:37](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/server/audio.py:37) and the configured STFT DC-drop/add transforms.
+- **Source-confirmed signal behavior:** the causal tenth-order low-pass changes phase and transition-band magnitude before inference. Dropping the entire lowest STFT bin is broader than removing only a waveform's constant DC offset. Claims that the original lower band is untouched are therefore too strong.
+- Define the intended preservation contract. Measure a low-band null test against the original and consider a controlled reconstruction that retains the original reliable band. Do not change model preprocessing casually: pretrained weights depend on it. Audible severity needs listening/null tests with real outputs.
+
+### 19. P2 — Clipping can become permanent before output validation
+
+- [x] Review PCM export in [A2SB_lightning_module_api.py:196](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/nvidia-a2sb-original-repo/A2SB_lightning_module_api.py:196) alongside [server/audio.py:98](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/server/audio.py:98).
+- **Source-confirmed:** model output is hard-clipped for integer export before the server inspects it. The later check tolerates up to 25% near-full-scale samples, so smaller clipping episodes can pass silently.
+- Preserve float intermediates, count/report over-range samples, and apply a documented stereo-linked headroom policy before final export. Whether normal model outputs trigger this requires GPU testing.
+
+## GUI, jobs, and operational reliability
+
+### 20. P2 — High-band solo and bypass can misrepresent what is being auditioned
+
+- [x] Fix [useAbPlayer.ts:96](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/web/src/hooks/useAbPlayer.ts:96).
+- **Source-confirmed:** enabling solo before the first playback gesture runs the effect before filters exist. Graph creation later initializes them to 20 Hz and does not rerun the unchanged solo effect. The GUI can say “solo” while playing essentially the full band.
+- Graph creation must apply the current solo state. Also implement a genuine bypass: three cascaded 20 Hz high-pass stages attenuate 20 Hz by about 9 dB, which is not transparent. Test solo-before-play, toggles, and file changes in a browser.
+- Separate media elements are not guaranteed sample-synchronous; the allowed drift can exceed the short switching crossfade. Verify A/B alignment before presenting the switch as a precise audio comparison.
+
+### 21. P2 — Progress displays are not actual model/training progress
+
+- [x] Fix [server/training.py:328](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/server/training.py:328) and inference progress emission in `A2SB_lightning_module_api.py`.
+- **Reproduced:** selecting only split 0.5–1.0 reports 100% even at 10% of its first progress bar because its absolute split index is 1 and selected split count is 1. The displayed training step remains the header's starting step. Epoch/validation bar percentages are also not global optimizer-step percentages.
+- **Source-confirmed inference limitation:** the actual API sampler uses a plain step loop; Lightning's outer one-item prediction bar does not provide per-diffusion-step progress. Existing synthetic bar tests do not exercise that behavior.
+- Emit structured progress from the actual sampling/update loops, use indices relative to selected splits, and account explicitly for resume offsets and validation phases.
+
+### 22. P2 — Structured preflight errors are discarded by the GUI client
+
+- [x] Fix [web/src/lib/api.ts:26](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/web/src/lib/api.ts:26) and `TrainView.tsx` error handling.
+- **Source-confirmed:** server preflight errors place the useful explanation in an object under `detail`, but the client only retains string details. The view's attempt to parse the resulting generic status text cannot recover the problems.
+- Preserve structured error payloads in `ApiError`. Test the real endpoint-to-client shape for failed training preflight.
+
+### 23. P2 — Vetting results can become stale, and dataset duration is truncated
+
+- [x] Correct [TrainView.tsx](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/web/src/components/TrainView.tsx) and [server/training.py:99](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/server/training.py:99).
+- **Source-confirmed:** editing dataset paths does not reliably invalidate their existing vet results; submission can therefore rely on results for a different selection. Vetting decodes only 120 seconds but uses that decoded length as the file duration, understating long datasets.
+- Tie vet results to the exact submitted selection and invalidate stale/in-flight responses. Read full duration from metadata while retaining bounded analysis. Describe bandwidth/authenticity decisions as heuristics: spectral shape cannot prove a file's provenance.
+
+### 24. P2 — Cancelling the parent does not guarantee its children stop
+
+- [x] Fix [server/process.py:67](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/server/process.py:67).
+- **Reproduced:** after group SIGTERM, a parent exited while a child ignoring SIGTERM remained alive. Because `process.wait()` succeeded, escalation was skipped. Such a child can keep GPU resources after the job is marked cancelled.
+- Retain the process-group identity and check/escalate remaining group members after a bounded grace period, independently of the immediate parent's exit. Test the stubborn-child case.
+
+### 25. P2 — A full SSE queue can drop completion updates
+
+- [x] Fix [server/jobs.py:144](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/server/jobs.py:144).
+- **Reproduced:** the queued event-loop `put_nowait` raises `QueueFull` outside the scheduling call; a terminal job event is lost when the queue is already full. A connected GUI may remain stale until it resynchronizes.
+- Coalesce replaceable progress, define a dropping policy for logs, and retain terminal/latest job state reliably. Test a slow subscriber and reconnect recovery.
+
+### 26. P2 — One malformed history record can prevent startup
+
+- [x] Harden [server/jobs.py:182](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/server/jobs.py:182).
+- **Reproduced:** a syntactically valid `job.json` containing `{}` raises `KeyError('id')`. Only file/JSON parsing errors are caught; schema/construction errors escape the per-file recovery path.
+- Validate records independently, skip/quarantine invalid entries with a useful log, and continue loading good history. Test missing fields, incorrect types, and partial older schemas.
+
+### 27. P2 — Every container restart re-downloads and truncates release checkpoints
+
+- [x] Fix [entrypoint.sh:4](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/entrypoint.sh:4).
+- **Source-confirmed:** unconditional `wget -O` overwrites existing files on each start, including the unused one-split checkpoint. A network failure can leave a partial file and prevents startup despite previously having usable weights.
+- Cache validated checkpoints on persistent storage, download missing files to temporary names, and atomically rename after validation. Test an offline restart with existing weights and an interrupted download.
+
+### 28. P2 — Public deployment exposes privileged actions without authentication
+
+- [x] Review [app.py](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/app.py), [docker-compose.yml](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/docker-compose.yml), and the API deployment guidance.
+- **Source-confirmed, conditional on reachability:** the server binds externally and the published API has no application authentication. Anyone who can reach an unprotected deployment can operate its exposed job/training/checkpoint endpoints and access media within the allowed roots. Path restrictions are not user authorization.
+- Bind locally for local-only use; require an authenticated access layer for a public/pod endpoint. State that deployment requirement explicitly and verify it on the actual public URL.
+
+## Performance and secondary cleanup
+
+These are source-confirmed opportunities, not measured end-to-end speedup promises.
+
+- [x] **Avoid decoding/resampling a full training track for every short segment.** [datasets.py:144](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/nvidia-a2sb-original-repo/datasets/datasets.py:144) loads the whole source before cropping. Preprocess/cache or use bounded segment reads with resampling context. Benchmark long tracks.
+- [x] **Remove the unused inference model copy.** [A2SB_lightning_module_api.py:72](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/nvidia-a2sb-original-repo/A2SB_lightning_module_api.py:72) deep-copies the template for each split while retaining the registered template model. Lightning can move all three to the accelerator even though only the two loaded splits are sampled. Also remove the unused reconstruction of the corrupted input in `predict_step`. Measure peak VRAM before/after.
+- [x] **Bound analysis memory.** [server/analysis.py:242](/Volumes/SSD/Projects/A2SB-Upscaler-Docker/server/analysis.py:242) builds a full-resolution spectrogram before reducing it. A one-hour 44.1 kHz signal has about 310,000 frames at hop 512; its 1,025-bin complex64 STFT alone is roughly 2.5 GB, before magnitude/dB arrays. HF analysis also loads whole files. Stream/aggregate before producing the display-sized output; bound simultaneous analysis requests.
+- [x] **Fix or clearly fence dormant upstream helpers.** Examples include undefined names in alternative attention/pooling paths in `networks.py`, the function-versus-tensor `unsqueeze` mistake in `audio_utils.py`, the alternate model's `predict_step()` breakpoint, and the dataset error fallback's fixed modulo-99 indexing. These are not established failures of the currently configured GUI inference path; add focused tests if keeping those paths supported.
+- [x] **Align documentation and supported CLI behavior.** Correct the stale `--csv` vetting example, absolute-versus-additional step descriptions, “best validation loss” claims for checkpoints selected by global step, validation sample defaults, accepted training-file extensions, and checkpoint activation paths. Pin or constrain dependencies in pod setup consistently with the Docker stack.
+- [x] **Run behavioral checks in CI.** The current test/build successes did not catch the confirmed signal-processing, parser, artifact-path, and collision failures. Add the targeted regression cases above and run Python tests plus the frontend build on pull requests.
+
+## Stereo decision
+
+Do not treat replacing L/R with M/S as a prerequisite for this sweep. Neither independently restored representation guarantees the correct stereo relationship, and matching random seeds does not mathematically guarantee matching regenerated HF phase/coherence for different conditioning signals. The current fresh-process inference configuration already seeds each pass identically; verify that property explicitly if process lifetime or batching changes.
+
+Fix the demonstrable pipeline and measurement issues first. Then compare L/R and M/S on known full-band stereo references degraded identically, including mono/zero-side, hard-panned, anti-phase, and diffuse material. Measure per-channel error, bandwise stereo correlation, M/S energy balance, mono fold-down, exact alignment, and listening quality. Keep any M/S mode experimental until that evidence supports it. This audit does **not** establish a percentage of sound-quality loss from the existing L/R choice.
+
+## Suggested implementation order
+
+1. Prevent input/output collisions and aliases (4–6).
+2. Repair the training start → save → discover → activate chain (1–3, 7–11).
+3. Cover short/quiet audio and exact lengths (13–15), then trustworthy metrics and auditioning (16–23).
+4. Harden cancellation, event delivery, persistence, startup, and deployment access (24–28).
+5. Profile memory/I/O on the target GPU and perform real stereo listening/quality comparisons before changing the stereo representation.
