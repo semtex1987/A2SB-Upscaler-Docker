@@ -94,7 +94,8 @@ def spectral_scan(y: np.ndarray, sr: int) -> tuple[float, bool]:
     acoustic material as band-limited.
     """
     n_fft = 4096
-    spec = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=1024))
+    # ⚡ Bolt: 50% overlap is sufficient for macroscopic aggregations, providing a 2x speedup
+    spec = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=n_fft//2))
     p95 = np.percentile(spec, 95, axis=1)
     freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
     peak = float(p95.max())
