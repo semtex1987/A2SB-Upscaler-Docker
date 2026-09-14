@@ -141,7 +141,8 @@ def spectral_scan(y, sr, np, librosa) -> tuple[float, bool]:
     acoustic material.  The percentile keeps that energy visible.
     """
     n_fft = 4096
-    spec = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=1024))
+    # Use 50% overlap for a safe 2x speedup on macroscopic heuristic aggregations
+    spec = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=n_fft // 2))
     p95 = np.percentile(spec, 95, axis=1)
     freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
     peak = float(p95.max())
