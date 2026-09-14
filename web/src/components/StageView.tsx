@@ -325,16 +325,18 @@ function StagedFileRow({
   const overridden = file.cutoffHz !== file.suggestedCutoffHz;
 
   return (
-    <li className="rounded-lg border border-stroke bg-canvas">
+    <li className="relative rounded-lg border border-stroke bg-canvas">
       <div className="flex items-start gap-3 px-4 py-3">
         <input
+          id={`select-${file.id}`}
           type="checkbox"
           checked={file.selected}
           onChange={(event) => onChange({ ...file, selected: event.target.checked })}
           aria-label={`Include ${file.name}`}
-          className="mt-1 size-4 shrink-0 cursor-pointer accent-[var(--color-accent)]"
+          className="mt-1 size-4 shrink-0 cursor-pointer accent-[var(--color-accent)] relative z-10"
         />
-        <div className="min-w-0 flex-1">
+        <label htmlFor={`select-${file.id}`} className="after:absolute after:inset-0 cursor-pointer text-[0px]">Select {file.name}</label>
+        <div className="min-w-0 flex-1 pointer-events-none">
           <div className="flex flex-wrap items-center gap-2">
             <p className="truncate font-medium text-ink">{file.name}</p>
             <Badge tone={verdict.tone}>{verdict.label}</Badge>
@@ -357,7 +359,7 @@ function StagedFileRow({
           </p>
           <p className="mt-1.5 text-xs leading-relaxed text-ink-muted">{file.note}</p>
         </div>
-        <Button variant="ghost" size="icon" aria-label={`Remove ${file.name}`} onClick={onRemove}>
+        <Button variant="ghost" size="icon" aria-label={`Remove ${file.name}`} onClick={onRemove} className="relative z-10">
           <Trash2 className="size-4" aria-hidden />
         </Button>
       </div>
