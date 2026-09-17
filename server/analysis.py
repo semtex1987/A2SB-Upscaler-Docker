@@ -216,10 +216,7 @@ def _pool_time(matrix: np.ndarray, target_width: int) -> np.ndarray:
     if frames <= target_width:
         return matrix
     edges = np.linspace(0, frames, target_width + 1).astype(int)
-    return np.stack(
-        [matrix[:, edges[i] : max(edges[i] + 1, edges[i + 1])].max(axis=1) for i in range(target_width)],
-        axis=1,
-    )
+    return np.maximum.reduceat(matrix, edges[:-1], axis=1)
 
 
 def _pool_freq(matrix: np.ndarray, target_height: int) -> np.ndarray:
@@ -227,10 +224,12 @@ def _pool_freq(matrix: np.ndarray, target_height: int) -> np.ndarray:
     if bins <= target_height:
         return matrix
     edges = np.linspace(0, bins, target_height + 1).astype(int)
-    return np.stack(
-        [matrix[edges[i] : max(edges[i] + 1, edges[i + 1]), :].max(axis=0) for i in range(target_height)],
-        axis=0,
-    )
+    out = np.empty((target_height, matrix.shape[1]), dtype=matrix.dtype)
+    for i in range(target_height):
+        start = edges[i]
+        end = edges[i + 1] if edges[i + 1] > start else start + 1
+        out[i] = matrix[start:end, :].max(axis=0)
+    return out
 
 
 def spectrogram_payload(path: str, max_seconds: Optional[float] = None) -> dict:
@@ -277,10 +276,11 @@ def peak_envelope(path: str, buckets: int = 1600) -> dict:
 
     buckets = max(1, min(buckets, y.size))
     edges = np.linspace(0, y.size, buckets + 1).astype(int)
-    peaks: list[float] = []
-    for i in range(buckets):
-        window = y[edges[i] : max(edges[i] + 1, edges[i + 1])]
-        peaks.append(round(float(np.max(np.abs(window))), 4))
+
+    # Vectorized max-pooling across the time dimension
+    abs_y = np.abs(y)
+    peaks = np.maximum.reduceat(abs_y, edges[:-1])
+    peaks = np.round(peaks, 4).tolist()
 
     ceiling = max(peaks) or 1.0
     return {
