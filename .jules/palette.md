@@ -6,3 +6,7 @@
 ## 2026-07-26 - Contextual Instruction Pattern
 **Learning:** Users tend to ignore "walls of text" at the top of Gradio applications. Moving global instructions into localized component `info` properties places guidance exactly where users make decisions, significantly improving task completion and reducing confusion.
 **Action:** Always distribute global instructions into local component `info` properties rather than piling them in a single block at the top of the interface.
+
+## $(date +%Y-%m-%d) - Expand click targets for list checkboxes
+**Learning:** In list views where users select items via checkboxes, the default 16x16px click target violates Fitts's Law. Wrapping adjacent row content in a `<label>` creates semantically invalid HTML if it wraps block elements like `<div>` or `<p>`.
+**Action:** Always wrap the adjacent row content in a `<label htmlFor={id}>` with `cursor-pointer` to expand the hit area, and ensure you convert inner flow elements (`<div>`, `<p>`) to phrasing elements (`<span>`) with `block` or `flex` utility classes to maintain HTML5 compliance.
