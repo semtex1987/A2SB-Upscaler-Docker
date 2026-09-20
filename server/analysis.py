@@ -216,21 +216,30 @@ def _pool_time(matrix: np.ndarray, target_width: int) -> np.ndarray:
     if frames <= target_width:
         return matrix
     edges = np.linspace(0, frames, target_width + 1).astype(int)
-    return np.stack(
-        [matrix[:, edges[i] : max(edges[i] + 1, edges[i + 1])].max(axis=1) for i in range(target_width)],
-        axis=1,
-    )
+    unique_edges = np.unique(edges[:-1])
+    if len(unique_edges) < target_width:
+        return np.stack(
+            [matrix[:, edges[i] : max(edges[i] + 1, edges[i + 1])].max(axis=1) for i in range(target_width)],
+            axis=1,
+        )
+
+    # Fast C-level vectorization for contiguous chunk max-pooling
+    return np.maximum.reduceat(matrix, unique_edges, axis=1)
 
 
 def _pool_freq(matrix: np.ndarray, target_height: int) -> np.ndarray:
     bins = matrix.shape[0]
     if bins <= target_height:
         return matrix
+    frames = matrix.shape[1]
     edges = np.linspace(0, bins, target_height + 1).astype(int)
-    return np.stack(
-        [matrix[edges[i] : max(edges[i] + 1, edges[i + 1]), :].max(axis=0) for i in range(target_height)],
-        axis=0,
-    )
+
+    # Pre-allocate array and loop manually. For non-contiguous axes (axis=0),
+    # reduceat can suffer from cache misses making it slower. This is faster than np.stack comprehension.
+    out = np.empty((target_height, frames), dtype=matrix.dtype)
+    for i in range(target_height):
+        out[i, :] = matrix[edges[i] : max(edges[i] + 1, edges[i + 1]), :].max(axis=0)
+    return out
 
 
 def spectrogram_payload(path: str, max_seconds: Optional[float] = None) -> dict:
@@ -277,10 +286,15 @@ def peak_envelope(path: str, buckets: int = 1600) -> dict:
 
     buckets = max(1, min(buckets, y.size))
     edges = np.linspace(0, y.size, buckets + 1).astype(int)
-    peaks: list[float] = []
+
+    # Pre-allocate array and hoist absolute value computation out of the loop
+    # to avoid repeated unvectorized function overhead per slice.
+    out = np.empty(buckets, dtype=np.float64)
+    abs_y = np.abs(y)
     for i in range(buckets):
-        window = y[edges[i] : max(edges[i] + 1, edges[i + 1])]
-        peaks.append(round(float(np.max(np.abs(window))), 4))
+        out[i] = abs_y[edges[i] : max(edges[i] + 1, edges[i + 1])].max()
+
+    peaks = np.round(out, 4).tolist()
 
     ceiling = max(peaks) or 1.0
     return {

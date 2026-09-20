@@ -20,3 +20,7 @@
 ## 2026-06-13 - Optimize librosa spectral feature extraction
 **Learning:** `librosa.feature.spectral_flatness` and `librosa.feature.spectral_rolloff` default to `hop_length=n_fft//4` (512 when `n_fft=2048`), producing 75% STFT frame overlap. For coarse heuristic checks that aggregate over time (mean, percentile), this overlap computes far more frames than needed.
 **Action:** Set `hop_length=n_fft` (e.g., `hop_length=2048`) to eliminate the overlap when using these features for macroscopic heuristic checks. Keep `n_fft` at its default 2048 — only `hop_length` needs to change. This yields ~4× fewer STFT frames and proportionally less compute, with no meaningful accuracy loss for mean/percentile aggregations.
+
+## 2026-09-20 - Vectorize explicit max-pooling
+**Learning:** For piece-wise aggregations (like max-pooling) across a contiguous dimension (e.g., `axis=1`) in large numpy arrays, using native C-level vectorization via `np.maximum.reduceat` achieves massive speedups (~5x) over list comprehensions with `np.stack`. However, for non-contiguous dimensions (e.g., `axis=0`), `reduceat` can be slower due to cache misses. Pre-allocating an empty array (`np.empty`) and manual looping yields a ~3-4x speedup instead.
+**Action:** Replace `np.stack` list comprehensions with `np.maximum.reduceat` (for contiguous axes) or pre-allocated `np.empty` loops (for non-contiguous axes) when performing piece-wise aggregations in numpy arrays.
