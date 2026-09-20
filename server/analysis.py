@@ -216,10 +216,14 @@ def _pool_time(matrix: np.ndarray, target_width: int) -> np.ndarray:
     if frames <= target_width:
         return matrix
     edges = np.linspace(0, frames, target_width + 1).astype(int)
-    return np.stack(
-        [matrix[:, edges[i] : max(edges[i] + 1, edges[i + 1])].max(axis=1) for i in range(target_width)],
-        axis=1,
-    )
+
+    unique_edges = np.unique(edges[:-1])
+    if len(unique_edges) < len(edges) - 1:
+        return np.stack(
+            [matrix[:, edges[i] : max(edges[i] + 1, edges[i + 1])].max(axis=1) for i in range(target_width)],
+            axis=1,
+        )
+    return np.maximum.reduceat(matrix, edges[:-1], axis=1)
 
 
 def _pool_freq(matrix: np.ndarray, target_height: int) -> np.ndarray:
@@ -227,10 +231,11 @@ def _pool_freq(matrix: np.ndarray, target_height: int) -> np.ndarray:
     if bins <= target_height:
         return matrix
     edges = np.linspace(0, bins, target_height + 1).astype(int)
-    return np.stack(
-        [matrix[edges[i] : max(edges[i] + 1, edges[i + 1]), :].max(axis=0) for i in range(target_height)],
-        axis=0,
-    )
+
+    result = np.empty((target_height, matrix.shape[1]), dtype=matrix.dtype)
+    for i in range(target_height):
+        result[i] = matrix[edges[i] : max(edges[i] + 1, edges[i + 1]), :].max(axis=0)
+    return result
 
 
 def spectrogram_payload(path: str, max_seconds: Optional[float] = None) -> dict:
@@ -277,10 +282,16 @@ def peak_envelope(path: str, buckets: int = 1600) -> dict:
 
     buckets = max(1, min(buckets, y.size))
     edges = np.linspace(0, y.size, buckets + 1).astype(int)
-    peaks: list[float] = []
-    for i in range(buckets):
-        window = y[edges[i] : max(edges[i] + 1, edges[i + 1])]
-        peaks.append(round(float(np.max(np.abs(window))), 4))
+
+    unique_edges = np.unique(edges[:-1])
+    if len(unique_edges) < len(edges) - 1:
+        peaks: list[float] = []
+        for i in range(buckets):
+            window = y[edges[i] : max(edges[i] + 1, edges[i + 1])]
+            peaks.append(round(float(np.max(np.abs(window))), 4))
+    else:
+        raw_peaks = np.maximum.reduceat(np.abs(y), edges[:-1])
+        peaks = np.round(raw_peaks.astype(np.float64), 4).tolist()
 
     ceiling = max(peaks) or 1.0
     return {
