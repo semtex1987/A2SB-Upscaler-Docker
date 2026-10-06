@@ -9,13 +9,24 @@ interface Options {
   cutoffHz: number;
 }
 
-/** Transparent corner for the solo chain when solo is off. */
-const BYPASS_HZ = 20;
 /** Three cascaded biquads give ~36 dB/oct, steep enough to isolate the band. */
 const SOLO_STAGES = 3;
 const SWITCH_RAMP_SEC = 0.015;
-/** Resync the muted element if it drifts further than this from the audible one. */
-const MAX_DRIFT_SEC = 0.06;
+/**
+ * Resync the muted element if it drifts further than this from the audible one.
+ * Kept at or below the A/B gain crossfade so a late catch-up is not more
+ * audible than the switch itself. Two media elements are still not
+ * sample-synchronous; this is a catch-up, not a shared clock.
+ */
+const MAX_DRIFT_SEC = 0.02;
+
+export function soloGains(soloOn: boolean): { dry: number; wet: number } {
+  return soloOn ? { dry: 0, wet: 1 } : { dry: 1, wet: 0 };
+}
+
+export function soloCornerHz(cutoffHz: number): number {
+  return Math.max(cutoffHz, 100);
+}
 
 /**
  * Plays the filtered input and the restored output in lockstep and switches
@@ -24,6 +35,10 @@ const MAX_DRIFT_SEC = 0.06;
  * Both elements run at once and one is muted, so an A/B switch is a gain change
  * rather than a seek. That is the whole point: a seek would break the comparison
  * by putting you somewhere else in the file at the moment you switch.
+ *
+ * High-band solo is a separate wet path (cascaded high-pass). When solo is off,
+ * that path is silenced and the dry mixer goes straight to the destination —
+ * not three 20 Hz high-pass stages left in circuit.
  */
 export function useAbPlayer({ filteredUrl, restoredUrl, cutoffHz }: Options) {
   const [source, setSource] = useState<AbSource>("restored");
@@ -38,10 +53,16 @@ export function useAbPlayer({ filteredUrl, restoredUrl, cutoffHz }: Options) {
   const restoredRef = useRef<HTMLAudioElement | null>(null);
   const contextRef = useRef<AudioContext | null>(null);
   const gainsRef = useRef<{ filtered: GainNode; restored: GainNode } | null>(null);
+  const dryGainRef = useRef<GainNode | null>(null);
+  const wetGainRef = useRef<GainNode | null>(null);
   const filtersRef = useRef<BiquadFilterNode[]>([]);
   const frameRef = useRef<number | null>(null);
   const sourceRef = useRef<AbSource>(source);
   sourceRef.current = source;
+  const soloRef = useRef(soloHighBand);
+  soloRef.current = soloHighBand;
+  const cutoffRef = useRef(cutoffHz);
+  cutoffRef.current = cutoffHz;
 
   // -- element setup -------------------------------------------------------
 
@@ -108,23 +129,34 @@ export function useAbPlayer({ filteredUrl, restoredUrl, cutoffHz }: Options) {
     filteredGain.connect(mixer);
     restoredGain.connect(mixer);
 
-    // Always in circuit; a 20 Hz corner is inaudible, so toggling solo is a
-    // frequency change rather than a reconnect that could click.
+    const dryGain = context.createGain();
+    const wetGain = context.createGain();
+    mixer.connect(dryGain);
+    dryGain.connect(context.destination);
+
     const filters: BiquadFilterNode[] = [];
     let tail: AudioNode = mixer;
+    const corner = soloCornerHz(cutoffRef.current);
     for (let stage = 0; stage < SOLO_STAGES; stage += 1) {
       const filter = context.createBiquadFilter();
       filter.type = "highpass";
-      filter.frequency.value = BYPASS_HZ;
+      filter.frequency.value = corner;
       filter.Q.value = Math.SQRT1_2;
       tail.connect(filter);
       tail = filter;
       filters.push(filter);
     }
-    tail.connect(context.destination);
+    tail.connect(wetGain);
+    wetGain.connect(context.destination);
+
+    const routing = soloGains(soloRef.current);
+    dryGain.gain.value = routing.dry;
+    wetGain.gain.value = routing.wet;
 
     contextRef.current = context;
     gainsRef.current = { filtered: filteredGain, restored: restoredGain };
+    dryGainRef.current = dryGain;
+    wetGainRef.current = wetGain;
     filtersRef.current = filters;
   }, []);
 
@@ -133,6 +165,8 @@ export function useAbPlayer({ filteredUrl, restoredUrl, cutoffHz }: Options) {
       void contextRef.current?.close();
       contextRef.current = null;
       gainsRef.current = null;
+      dryGainRef.current = null;
+      wetGainRef.current = null;
       filtersRef.current = [];
     };
   }, []);
@@ -153,14 +187,25 @@ export function useAbPlayer({ filteredUrl, restoredUrl, cutoffHz }: Options) {
   }, [source]);
 
   useEffect(() => {
-    const target = soloHighBand ? Math.max(cutoffHz, 100) : BYPASS_HZ;
     const context = contextRef.current;
+    const dryGain = dryGainRef.current;
+    const wetGain = wetGainRef.current;
+    if (!context || !dryGain || !wetGain) return;
+
+    const routing = soloGains(soloHighBand);
+    const now = context.currentTime;
+    for (const [param, value] of [
+      [dryGain.gain, routing.dry],
+      [wetGain.gain, routing.wet],
+    ] as const) {
+      param.cancelScheduledValues(now);
+      param.setValueAtTime(param.value, now);
+      param.linearRampToValueAtTime(value, now + SWITCH_RAMP_SEC);
+    }
+
+    const corner = soloCornerHz(cutoffHz);
     for (const filter of filtersRef.current) {
-      if (context) {
-        filter.frequency.setTargetAtTime(target, context.currentTime, 0.01);
-      } else {
-        filter.frequency.value = target;
-      }
+      filter.frequency.setTargetAtTime(corner, now, 0.01);
     }
   }, [soloHighBand, cutoffHz]);
 

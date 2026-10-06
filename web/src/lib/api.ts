@@ -5,6 +5,8 @@ import type {
   ServerConfig,
   SourceAnalysis,
   SpectrogramPayload,
+  TensorBoardStatus,
+  TrainingMetrics,
   TrainJob,
   VetResult,
   WaveformPayload,
@@ -14,23 +16,39 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly detail: unknown = message,
   ) {
     super(message);
     this.name = "ApiError";
   }
 }
 
+export function formatApiError(err: unknown): string {
+  if (err instanceof ApiError) {
+    const { detail } = err;
+    if (detail && typeof detail === "object" && "problems" in detail) {
+      const problems = (detail as { problems: unknown }).problems;
+      if (Array.isArray(problems)) {
+        return problems.map(String).join("\n");
+      }
+    }
+    return err.message;
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
   if (!response.ok) {
-    let detail = `${response.status} ${response.statusText}`;
+    let detail: unknown = `${response.status} ${response.statusText}`;
     try {
       const body = (await response.json()) as { detail?: unknown };
-      if (typeof body.detail === "string") detail = body.detail;
+      if (body.detail !== undefined) detail = body.detail;
     } catch {
       // Non-JSON error bodies keep the status line as their message.
     }
-    throw new ApiError(detail, response.status);
+    const message = typeof detail === "string" ? detail : JSON.stringify(detail);
+    throw new ApiError(message, response.status, detail);
   }
   return (await response.json()) as T;
 }
@@ -116,6 +134,8 @@ export const api = {
     valEvery: number | null;
     valSamples: number | null;
     restart: boolean;
+    resumeFromJobId: string | null;
+    untilStep: number | null;
   }) =>
     request<TrainJob>("/api/training/jobs", {
       method: "POST",
@@ -133,8 +153,19 @@ export const api = {
   revertCheckpoints: () =>
     request<{ checkpoints: CheckpointStatus }>("/api/training/revert", { method: "POST" }),
 
-  trainingMetrics: (splits?: string) =>
-    request<Record<string, Array<Record<string, number>>>>(
-      `/api/training/metrics${splits ? `?splits=${encodeURIComponent(splits)}` : ""}`,
-    ),
+  trainingMetrics: (splits?: string, jobId?: string) => {
+    const params = new URLSearchParams();
+    if (splits) params.set("splits", splits);
+    if (jobId) params.set("jobId", jobId);
+    const query = params.toString();
+    return request<TrainingMetrics>(`/api/training/metrics${query ? `?${query}` : ""}`);
+  },
+
+  tensorboardStatus: () => request<TensorBoardStatus>("/api/training/tensorboard"),
+
+  startTensorboard: () =>
+    request<TensorBoardStatus>("/api/training/tensorboard/start", { method: "POST" }),
+
+  stopTensorboard: () =>
+    request<TensorBoardStatus>("/api/training/tensorboard/stop", { method: "POST" }),
 };

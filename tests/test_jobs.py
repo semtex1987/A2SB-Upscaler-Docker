@@ -18,6 +18,7 @@ from server.jobs import (
     QUEUED,
     RUNNING,
     JobStore,
+    TrainParams,
 )
 from server.pipeline import FileProgress, FileResult, PipelineError
 

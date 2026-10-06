@@ -4,17 +4,28 @@ import {
   CheckCircle2,
   ChevronDown,
   CircleSlash,
+  ExternalLink,
   FolderSearch,
   Loader2,
+  Play,
   RefreshCw,
   Terminal,
   XCircle,
 } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, formatApiError } from "@/lib/api";
 import { cn, formatBytes, formatClock, formatDuration, formatElapsed, formatHz } from "@/lib/utils";
-import type { BrowseEntry, CheckpointStatus, Job, TrainJob, VetResult } from "@/lib/types";
+import type {
+  BrowseEntry,
+  CheckpointStatus,
+  Job,
+  TensorBoardStatus,
+  TrainingMetrics,
+  TrainJob,
+  VetResult,
+} from "@/lib/types";
 import { isTrainJob } from "@/lib/types";
 import type { TrainingConfig } from "@/lib/types";
+import { LossCurve } from "@/components/LossCurve";
 import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Panel, PanelBody, PanelHeader } from "@/components/ui/card";
@@ -32,6 +43,8 @@ interface TrainViewProps {
 export function TrainView({ config, jobs, logs, onHydrateLog }: TrainViewProps) {
   const trainJobs = jobs.filter(isTrainJob);
   const activeJob = trainJobs.find((j) => j.status === "running" || j.status === "queued") ?? null;
+  const resumableJobs = trainJobs.filter((j) => j.status !== "running" && j.status !== "queued");
+  const metricsJobId = activeJob?.id ?? trainJobs[0]?.id;
 
   // Dataset panel state
   const [pattern, setPattern] = useState(config.dataDir);
@@ -50,10 +63,27 @@ export function TrainView({ config, jobs, logs, onHydrateLog }: TrainViewProps) 
   const [valEvery, setValEvery] = useState<number | null>(null);
   const [valSamples, setValSamples] = useState<number | null>(null);
   const [restart, setRestart] = useState(false);
+  const [resumeFromJobId, setResumeFromJobId] = useState("");
+  const vetGeneration = useRef(0);
+  const vettedPattern = useRef<string | null>(null);
 
   // Submit state
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Metrics + TensorBoard state
+  const [metrics, setMetrics] = useState<TrainingMetrics>({});
+  const [tbStatus, setTbStatus] = useState<TensorBoardStatus | null>(null);
+  const [tbStarting, setTbStarting] = useState(false);
+  const [tbError, setTbError] = useState<string | null>(null);
+  const [tbEmbedded, setTbEmbedded] = useState(false);
+
+  useEffect(() => {
+    vetGeneration.current += 1;
+    setVetResults([]);
+    setEntries([]);
+    vettedPattern.current = null;
+  }, [pattern]);
 
   // Checkpoint state
   const [checkpoints, setCheckpoints] = useState<CheckpointStatus | null>(null);
@@ -73,13 +103,88 @@ export function TrainView({ config, jobs, logs, onHydrateLog }: TrainViewProps) 
     void loadCheckpoints();
   }, [loadCheckpoints]);
 
+  const loadMetrics = useCallback(async () => {
+    try {
+      setMetrics(await api.trainingMetrics(undefined, metricsJobId));
+    } catch {
+      // Absent until Lightning writes its first metrics.csv; the panel hides itself.
+    }
+  }, [metricsJobId]);
+
+  // Depends on the boolean rather than on activeJob, because that object is
+  // rebuilt on every SSE tick and would restart the interval before it fired.
+  const isTraining = activeJob !== null;
+  useEffect(() => {
+    void loadMetrics();
+    if (!isTraining) return;
+    const timer = setInterval(() => void loadMetrics(), 10_000);
+    return () => clearInterval(timer);
+  }, [loadMetrics, isTraining]);
+
+  const refreshTensorboard = useCallback(async () => {
+    try {
+      const status = await api.tensorboardStatus();
+      setTbStatus(status);
+      if (status.ready) setTbEmbedded(true);
+      return status;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshTensorboard();
+  }, [refreshTensorboard]);
+
+  const startTensorboard = useCallback(async () => {
+    setTbStarting(true);
+    setTbError(null);
+    try {
+      setTbStatus(await api.startTensorboard());
+      // The start call returns as soon as the process exists; TensorBoard needs
+      // another 15-30s to scan the log tree before the iframe will load.
+      const deadline = Date.now() + 90_000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const status = await refreshTensorboard();
+        if (status?.ready) return;
+        if (status && !status.running) {
+          setTbError(status.error ?? "TensorBoard stopped while starting up.");
+          return;
+        }
+      }
+      setTbError("TensorBoard did not finish starting up. Check the server logs.");
+    } catch (err) {
+      setTbError((err as Error).message);
+    } finally {
+      setTbStarting(false);
+    }
+  }, [refreshTensorboard]);
+
+  // Splits are absent until their run starts, so an empty one is not shown.
+  const splitsWithMetrics = Object.entries(metrics).filter(([, rows]) => rows.length > 0);
+
+  const stopTensorboard = useCallback(async () => {
+    setTbEmbedded(false);
+    setTbError(null);
+    try {
+      setTbStatus(await api.stopTensorboard());
+    } catch (err) {
+      setTbError((err as Error).message);
+    }
+  }, []);
+
   const browseAndVet = useCallback(async () => {
     if (!pattern.trim()) return;
+    const generation = ++vetGeneration.current;
+    const requested = pattern.trim();
     setBrowsing(true);
     setBrowseError(null);
     setVetResults([]);
+    vettedPattern.current = null;
     try {
       const { entries: found } = await api.trainingBrowse(pattern);
+      if (generation !== vetGeneration.current) return;
       setEntries(found);
       if (found.length === 0) {
         setBrowseError("No audio files found. Check the path and try again.");
@@ -87,12 +192,17 @@ export function TrainView({ config, jobs, logs, onHydrateLog }: TrainViewProps) 
       }
       setVetting(true);
       const { files } = await api.trainingVet(found.map((e) => e.path));
+      if (generation !== vetGeneration.current) return;
       setVetResults(files);
+      vettedPattern.current = requested;
     } catch (err) {
-      setBrowseError((err as Error).message);
+      if (generation !== vetGeneration.current) return;
+      setBrowseError(formatApiError(err));
     } finally {
-      setBrowsing(false);
-      setVetting(false);
+      if (generation === vetGeneration.current) {
+        setBrowsing(false);
+        setVetting(false);
+      }
     }
   }, [pattern]);
 
@@ -105,7 +215,10 @@ export function TrainView({ config, jobs, logs, onHydrateLog }: TrainViewProps) 
     .reduce((sum, r) => sum + r.durationSec, 0);
 
   const canSubmit =
-    !activeJob && vetResults.some((r) => r.verdict !== "reject") && !submitting;
+    !activeJob &&
+    vettedPattern.current === pattern.trim() &&
+    vetResults.some((r) => r.verdict !== "reject") &&
+    !submitting;
 
   const submit = useCallback(async () => {
     if (!canSubmit) return;
@@ -121,25 +234,16 @@ export function TrainView({ config, jobs, logs, onHydrateLog }: TrainViewProps) 
         valFrac,
         valEvery,
         valSamples,
-        restart,
+        restart: Boolean(resumeFromJobId) && restart,
+        resumeFromJobId: resumeFromJobId || null,
+        untilStep: null,
       });
     } catch (err) {
-      const msg = (err as Error).message;
-      // Preflight errors arrive as JSON: {problems: string[]}
-      try {
-        const body = JSON.parse(msg) as { problems?: string[] };
-        if (Array.isArray(body.problems)) {
-          setSubmitError(body.problems.join("\n"));
-        } else {
-          setSubmitError(msg);
-        }
-      } catch {
-        setSubmitError(msg);
-      }
+      setSubmitError(formatApiError(err));
     } finally {
       setSubmitting(false);
     }
-  }, [canSubmit, batchSize, learningRate, pattern, restart, splits, steps, valEvery, valFrac, valSamples]);
+  }, [canSubmit, batchSize, learningRate, pattern, restart, resumeFromJobId, splits, steps, valEvery, valFrac, valSamples]);
 
   return (
     <div className="space-y-6">
@@ -187,8 +291,10 @@ export function TrainView({ config, jobs, logs, onHydrateLog }: TrainViewProps) 
                   </Button>
                 </div>
                 <p className="mt-1 text-xs text-ink-faint">
-                  Audio is vetted for genuine full-bandwidth content. Only PASS and CHECK files
-                  are usable training material.
+                  Bandwidth verdicts are spectral heuristics (first two minutes), not proof of
+                  provenance. Duration comes from the file header. Changing the path clears a
+                  previous scan — re-run Scan &amp; vet before submitting. Only PASS and CHECK
+                  files are usable training material.
                 </p>
               </div>
 
@@ -246,6 +352,112 @@ export function TrainView({ config, jobs, logs, onHydrateLog }: TrainViewProps) 
               ))}
             </div>
           ) : null}
+
+          {/* Loss curves, read from Lightning's metrics.csv */}
+          {splitsWithMetrics.length > 0 ? (
+            <Panel>
+              <PanelHeader
+                title="Loss curves"
+                description={
+                  isTraining
+                    ? "Updating every 10 seconds while training runs."
+                    : "From the most recent run in each split."
+                }
+                actions={
+                  <Button variant="ghost" onClick={() => void loadMetrics()} title="Refresh">
+                    <RefreshCw className="size-4" aria-hidden />
+                  </Button>
+                }
+              />
+              <PanelBody className="space-y-3">
+                {splitsWithMetrics.map(([tag, rows]) => (
+                  <LossCurve key={tag} label={tag} rows={rows} />
+                ))}
+              </PanelBody>
+            </Panel>
+          ) : null}
+
+          {/* TensorBoard */}
+          <Panel>
+            <PanelHeader
+              title="TensorBoard"
+              description="Scalars, histograms and distributions for the full training history."
+              actions={
+                <>
+                  {tbStatus?.running ? (
+                    <Badge tone={tbStatus.ready ? "gain" : "neutral"}>
+                      {tbStatus.ready ? "Running" : "Starting"}
+                    </Badge>
+                  ) : null}
+                  {tbStatus?.ready ? (
+                    <>
+                      <a
+                        href={tbStatus.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex min-h-9 items-center gap-1.5 rounded-lg px-3 text-sm text-ink-muted transition-colors duration-150 hover:bg-surface-raised hover:text-ink"
+                      >
+                        <ExternalLink className="size-4" aria-hidden />
+                        New tab
+                      </a>
+                      <Button variant="secondary" onClick={() => void stopTensorboard()}>
+                        Stop
+                      </Button>
+                    </>
+                  ) : null}
+                </>
+              }
+            />
+            <PanelBody className="space-y-3">
+              {tbStatus && !tbStatus.available ? (
+                <p className="text-sm text-ink-muted">
+                  {tbStatus.error ??
+                    "TensorBoard is not installed in this image. Rebuild to enable it."}
+                </p>
+              ) : (
+                <>
+                  {!tbStatus?.running ? (
+                    <>
+                      <p className="text-sm text-ink-muted">
+                        {tbStatus?.hasEventFiles
+                          ? "Event files are ready to load."
+                          : "No event files yet — start a fine-tune, then launch TensorBoard to watch it."}
+                      </p>
+                      <Button disabled={tbStarting} onClick={() => void startTensorboard()}>
+                        {tbStarting ? (
+                          <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden />
+                        ) : (
+                          <Play className="size-4" aria-hidden />
+                        )}
+                        {tbStarting ? "Starting TensorBoard…" : "Launch TensorBoard"}
+                      </Button>
+                    </>
+                  ) : null}
+
+                  {tbStatus?.running && !tbStatus.ready ? (
+                    <p className="flex items-center gap-2 text-sm text-ink-muted">
+                      <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden />
+                      Scanning the log directory. This usually takes 15–30 seconds.
+                    </p>
+                  ) : null}
+
+                  {tbError ? (
+                    <div className="rounded-lg border border-fault/40 bg-fault/5 px-3 py-2">
+                      <p className="font-mono text-xs whitespace-pre-wrap text-fault">{tbError}</p>
+                    </div>
+                  ) : null}
+
+                  {tbEmbedded && tbStatus?.ready ? (
+                    <iframe
+                      src={tbStatus.url}
+                      title="TensorBoard"
+                      className="h-[640px] w-full rounded-lg border border-stroke bg-surface"
+                    />
+                  ) : null}
+                </>
+              )}
+            </PanelBody>
+          </Panel>
         </div>
 
         {/* Right column */}
@@ -258,8 +470,8 @@ export function TrainView({ config, jobs, logs, onHydrateLog }: TrainViewProps) 
             />
             <PanelBody className="space-y-5">
               <Slider
-                label="Steps per split"
-                hint="Each split runs this many gradient updates. Both splits run for a full fine-tune."
+                label="Additional steps per split"
+                hint="Optimizer updates from the starting checkpoint (0 for a new run, or the resumed global step). Use Resume below to continue a previous job instead of sharing one output folder."
                 min={config.steps.min}
                 max={config.steps.max}
                 value={steps}
@@ -377,14 +589,42 @@ export function TrainView({ config, jobs, logs, onHydrateLog }: TrainViewProps) 
                       type="checkbox"
                       checked={restart}
                       onChange={(e) => setRestart(e.target.checked)}
+                      disabled={!resumeFromJobId}
                       className="size-4 rounded border-stroke accent-accent"
                     />
                     <span className="text-sm text-ink">
-                      Restart — ignore existing checkpoints and start from release weights
+                      Restart this run — ignore its checkpoints and start from release weights
                     </span>
                   </label>
                 </div>
               </details>
+
+              <div>
+                <label htmlFor="resume-from" className="mb-1.5 block text-sm font-medium text-ink">
+                  Resume from
+                </label>
+                <select
+                  id="resume-from"
+                  value={resumeFromJobId}
+                  onChange={(e) => {
+                    setResumeFromJobId(e.target.value);
+                    if (!e.target.value) setRestart(false);
+                  }}
+                  className="w-full rounded-md border border-stroke bg-surface px-3 py-2 font-mono text-sm text-ink"
+                >
+                  <option value="">New run (fresh output directory)</option>
+                  {resumableJobs.map((job) => (
+                    <option key={job.id} value={job.id}>
+                      {job.id} · {job.trainParams?.splits ?? "both"} · {job.status}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-ink-faint">
+                  Each new job writes to its own folder under the training output directory.
+                  Resume continues that job's checkpoints; additional steps are added to its
+                  current global step. Leaving this on a new run never picks up an earlier job.
+                </p>
+              </div>
 
               {submitError ? (
                 <div className="rounded-lg border border-fault/40 bg-fault/5 px-3 py-2">

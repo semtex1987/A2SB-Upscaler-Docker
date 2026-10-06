@@ -167,7 +167,7 @@ function FileProgressRow({ file }: { file: JobFile }) {
 
       {file.result ? (
         <p className="mt-2 font-mono text-xs text-ink-muted tnum">
-          {formatDb(file.result.highBandInDb)} dB → {formatDb(file.result.highBandOutDb)} dB (
+          {formatDb(file.result.highBandInDb)} dBFS → {formatDb(file.result.highBandOutDb)} dBFS (
           <span
             className={cn(
               file.result.highBandDeltaDb >= 3

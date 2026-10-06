@@ -138,12 +138,15 @@ export function AbTransport({ result }: AbTransportProps) {
       </div>
 
       <p className="text-xs leading-relaxed text-ink-muted">
-        Both versions play in lockstep, so switching never moves the playhead.{" "}
+        Both versions share one playhead, so switching never seeks. The two media
+        elements are resynced if they drift more than 20 ms — close enough for listening,
+        not a sample-accurate clock.{" "}
         <kbd className="rounded border border-stroke bg-canvas px-1 font-mono">Space</kbd> plays,{" "}
         <kbd className="rounded border border-stroke bg-canvas px-1 font-mono">A</kbd> switches
         source, <kbd className="rounded border border-stroke bg-canvas px-1 font-mono">S</kbd>{" "}
-        solos the reconstructed band. Solo is the honest test: if that band is silent or gritty,
-        the model did not give you anything worth keeping.
+        solos the reconstructed band (a high-pass path that is fully bypassed when off).
+        Solo is the honest test: if that band is silent or gritty, the model did not give
+        you anything worth keeping.
       </p>
 
       {player.error ? <p className="text-sm text-fault">{player.error}</p> : null}

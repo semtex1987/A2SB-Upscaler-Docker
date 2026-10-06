@@ -42,9 +42,12 @@ export function DeltaHero({ result }: { result: FileResult }) {
         </p>
         <p className={cn("mt-1 font-mono text-5xl leading-none font-bold tnum", TONE_TEXT[tone])}>
           {formatDb(result.highBandDeltaDb, true)}
-          <span className="ml-1 text-2xl font-medium">dB</span>
+          <span className="ml-1 text-2xl font-medium">dBFS</span>
         </p>
         <p className={cn("mt-2 text-sm font-medium", TONE_TEXT[tone])}>{TONE_VERDICT[tone]}</p>
+        <p className="mt-1 text-xs text-ink-faint">
+          High-band RMS vs full scale. Added energy can be restoration or noise.
+        </p>
       </div>
 
       <div className="space-y-3">
@@ -61,9 +64,11 @@ export function DeltaHero({ result }: { result: FileResult }) {
           tone={tone}
         />
         <p className="text-xs leading-relaxed text-ink-muted">
-          RMS level of everything at or above the cutoff, measured on the rendered files.{" "}
-          {result.channels === 2 ? "Stereo" : "Mono"} · {result.steps} steps · batch{" "}
-          {result.batchSize} · took {formatElapsed(result.elapsedSec)}.
+          RMS level (dBFS) of everything at or above the cutoff, high-passed per
+          channel so side-only stereo is not cancelled. Added energy can be
+          restoration or noise. {result.channels === 2 ? "Stereo" : "Mono"} ·{" "}
+          {result.steps} steps · batch {result.batchSize} · took{" "}
+          {formatElapsed(result.elapsedSec)}.
         </p>
       </div>
     </div>
