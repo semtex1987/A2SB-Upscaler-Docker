@@ -165,10 +165,12 @@ def write_run_override(
     dest: Path,
     root_folder: str,
     manifest_filename: str,
+    log_dir: Path,
+    tensorboard: bool = False,
     wandb_init: dict | None = None,
 ) -> Path:
-    """Write a small config that points the datamodule at our manifest, and
-    optionally swaps in a Weights & Biases logger.
+    """Write a small config that points the datamodule at our manifest and
+    pins the logger set explicitly.
 
     mix_dataset_config is an un-annotated dict parameter, and overriding a nested
     key through CLI dot-notation (--data.mix_dataset_config.CURATED.root_folder)
@@ -181,8 +183,6 @@ def write_run_override(
     Each dataset entry is copied from the base config with only the manifest
     location patched, preserving flags like apply_sr_loss_mask.
     """
-    import yaml
-
     base = yaml.safe_load(open(config_path, encoding="utf-8"))
     mdc = (base.get("data") or {}).get("mix_dataset_config") or {}
     patched = {}
@@ -195,16 +195,37 @@ def write_run_override(
         raise SystemExit(f"No data.mix_dataset_config found in {config_path}")
 
     override: dict = {"data": {"mix_dataset_config": patched}}
+
+    # The base config leaves trainer.logger null, which Lightning resolves to its
+    # *default* logger rather than to none. That default is CSVLogger only while
+    # the tensorboard package is absent, and flips to TensorBoardLogger the moment
+    # it is installed -- which would silently remove the metrics.csv the web UI's
+    # loss curve reads. So the logger set is always stated explicitly here, with
+    # CSVLogger first and non-negotiable. Going through this config rather than
+    # CLI dot-notation keeps the nested class_path/init_args structure intact.
+    loggers: list[dict] = [
+        {
+            "class_path": "lightning.pytorch.loggers.CSVLogger",
+            "init_args": {"save_dir": str(log_dir), "name": "lightning_logs"},
+        }
+    ]
+    if tensorboard:
+        # A separate `name` from CSVLogger's, so the two do not race for the same
+        # version_N directory. TensorBoard's --logdir walks the tree and finds it.
+        loggers.append(
+            {
+                "class_path": "lightning.pytorch.loggers.TensorBoardLogger",
+                "init_args": {"save_dir": str(log_dir), "name": "tensorboard"},
+            }
+        )
     if wandb_init is not None:
-        # The base config leaves trainer.logger null, so Lightning falls back to
-        # CSVLogger. Point it at W&B instead; going through this config keeps the
-        # nested class_path/init_args structure intact.
-        override["trainer"] = {
-            "logger": {
+        loggers.append(
+            {
                 "class_path": "lightning.pytorch.loggers.WandbLogger",
                 "init_args": wandb_init,
             }
-        }
+        )
+    override["trainer"] = {"logger": loggers}
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     with open(dest, "w", encoding="utf-8") as f:
@@ -502,11 +523,18 @@ def main() -> int:
              "--batch-size before adding a second one.",
     )
     parser.add_argument(
+        "--tensorboard",
+        action="store_true",
+        help="Also write TensorBoard event files, under "
+             "<output-dir>/split_*/tensorboard/. Needs the tensorboard package. "
+             "The CSV logs are written either way, so this is purely additive.",
+    )
+    parser.add_argument(
         "--wandb",
         action="store_true",
-        help="Log metrics to Weights & Biases instead of the default CSV logger. "
-             "Needs the wandb package and a WANDB_API_KEY (or a prior "
-             "'wandb login'). Each split is logged as its own run.",
+        help="Also log metrics to Weights & Biases. Needs the wandb package and a "
+             "WANDB_API_KEY (or a prior 'wandb login'). Each split is logged as "
+             "its own run. The CSV logs are written either way.",
     )
     parser.add_argument(
         "--wandb-project",
@@ -572,6 +600,15 @@ def main() -> int:
             f"      apt-get update && apt-get install -y ffmpeg libsndfile1\n"
             f"      pip install librosa soundfile"
         )
+    if args.tensorboard:
+        try:
+            import tensorboard  # noqa: F401
+        except Exception as e:  # noqa: BLE001
+            problems.append(
+                f"--tensorboard given but tensorboard is unusable "
+                f"({type(e).__name__}: {e})\n"
+                f"    pip install tensorboard"
+            )
     if args.wandb:
         try:
             import wandb  # noqa: F401
@@ -723,6 +760,8 @@ def main() -> int:
             data_override=write_run_override(
                 CONFIG_SPLIT_1, out1 / "data_override.yaml",
                 root_folder, manifest_filename,
+                log_dir=out1,
+                tensorboard=args.tensorboard,
                 wandb_init=wandb_init_for("split_0.0_0.5"),
             ),
         )

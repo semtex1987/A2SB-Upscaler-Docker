@@ -138,8 +138,8 @@ class TimePartitionedPretrainedSTFTBridgeModel(LightningModule):
 
         # ⚡ Bolt: Precalculate temporal embeddings to avoid loop overhead
         t_embs = self.t_to_emb(t_steps[0, :-1]).unsqueeze(1).repeat(1, x_1.shape[0], 1)
-        for t_idx in range(n_steps):
-            # print(t_idx)
+        # tqdm on the diffusion loop — Lightning's outer predict bar is one item.
+        for t_idx in tqdm(range(n_steps), desc="Sampling", mininterval=0.25):
             t_emb = t_embs[t_idx]
             t = t_steps[:, t_idx]
             t_prev = t_steps[:, t_idx+1]

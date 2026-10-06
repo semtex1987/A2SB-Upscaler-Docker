@@ -150,6 +150,36 @@ export interface TrainingConfig {
   splits: string[];
 }
 
+/**
+ * One row of Lightning's metrics.csv. The keys are the CSV's own column names,
+ * so unlike the rest of the API they are snake_case and not camelized. Which
+ * columns appear depends on what the model logged, and validation columns are
+ * absent from the rows between validation runs.
+ */
+export interface MetricRow {
+  step?: number;
+  epoch?: number;
+  train_loss?: number;
+  val_loss?: number;
+  [column: string]: number | string | undefined;
+}
+
+/** Keyed by split tag, e.g. `"0.0-0.5"`. */
+export type TrainingMetrics = Record<string, MetricRow[]>;
+
+export interface TensorBoardStatus {
+  /** False when the tensorboard package is missing from the image. */
+  available: boolean;
+  running: boolean;
+  /** Bound its port and answering. Lags `running` by 15-30s during startup. */
+  ready: boolean;
+  url: string;
+  pid: number | null;
+  error: string | null;
+  logDir: string;
+  hasEventFiles: boolean;
+}
+
 export interface ServerConfig {
   steps: { min: number; max: number; default: number };
   batchSize: { min: number; max: number; default: number };

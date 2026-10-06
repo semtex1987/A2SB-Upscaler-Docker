@@ -31,12 +31,14 @@ RUN pip install --no-cache-dir \
     scipy==1.15.3 \
     matplotlib==3.10.0 \
     librosa==0.11.0 \
+    soxr==0.5.0.post1 \
     soundfile==0.13.1 \
     einops==0.8.1 \
     pytorch_lightning==2.5.0 \
     lightning==2.5.0 \
     rotary_embedding_torch==0.8.9 \
     tqdm==4.67.1 \
+    tensorboard==2.20.0 \
     wandb==0.19.6
 
 RUN pip install --no-cache-dir --no-deps ssr_eval

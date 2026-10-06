@@ -63,7 +63,9 @@ RUN pip install --no-cache-dir \
     pydub==0.25.1 \
     fastapi==0.121.3 \
     "uvicorn[standard]==0.38.0" \
-    python-multipart==0.0.20
+    python-multipart==0.0.20 \
+    tensorboard==2.20.0 \
+    httpx==0.28.1
 
 RUN pip install --no-cache-dir --no-deps ssr_eval
 
@@ -75,6 +77,12 @@ RUN mkdir -p ckpts
 # IMPORTANT: ensemble_2split_sampling expects the two split-domain checkpoints
 # (0.0-0.5 and 0.5-1.0). Using the one-split checkpoint here can leave the
 # upper split unmodeled, which manifests as zero-filled high-frequency bands.
+#
+# logger is pinned off because the config ships `logger: null`, which Lightning
+# resolves to its *default* logger rather than to none. With tensorboard now
+# installed that default flips from CSVLogger to TensorBoardLogger, so every
+# restoration would start writing event files into /debug. Prediction loops log
+# no metrics, so the correct value here is simply False.
 RUN python3 -c "import yaml; \
     path = 'configs/ensemble_2split_sampling.yaml'; \
     data = yaml.safe_load(open(path)); \
@@ -86,6 +94,7 @@ RUN python3 -c "import yaml; \
     trainer['strategy'] = 'auto'; \
     trainer['devices'] = 1; \
     trainer['accelerator'] = 'gpu'; \
+    trainer['logger'] = False; \
     yaml.dump(data, open(path, 'w'), default_flow_style=False, sort_keys=False)"
 
 # 6. Set Environment Variables

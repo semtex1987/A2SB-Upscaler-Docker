@@ -45,6 +45,7 @@ from server.config import (
 )
 from server.jobs import JOB_KIND_TRAIN, TrainParams, store
 from server.serialization import camelize
+from server.tensorboard import manager as tensorboard
 from server.training import (
     SPLIT_BOTH,
     SPLIT_FIRST,
@@ -525,5 +526,47 @@ def revert() -> dict:
 
 
 @router.get("/training/metrics")
-def get_metrics(splits: str = SPLIT_BOTH) -> dict:
-    return read_training_metrics(str(TRAINING_OUTPUT_DIR), splits=splits)
+def get_metrics(splits: str = SPLIT_BOTH, job_id: Optional[str] = Query(default=None, alias="jobId")) -> dict:
+    output_dir = str(TRAINING_OUTPUT_DIR)
+    if job_id:
+        job = store.get(job_id)
+        if job is None or job.kind != JOB_KIND_TRAIN or job.train_params is None:
+            raise HTTPException(status_code=404, detail=f"Training job {job_id} not found.")
+        output_dir = job.train_params.output_dir
+    else:
+        latest = next(
+            (j for j in store.list_jobs() if j.kind == JOB_KIND_TRAIN and j.train_params),
+            None,
+        )
+        if latest is not None and latest.train_params is not None:
+            output_dir = latest.train_params.output_dir
+    return read_training_metrics(output_dir, splits=splits)
+
+
+@router.get("/training/tensorboard")
+def tensorboard_status() -> dict:
+    return camelize(asdict(tensorboard.status()))
+
+
+@router.post("/training/tensorboard/start")
+def tensorboard_start() -> dict:
+    """Spawn TensorBoard and return immediately.
+
+    The response says `running` but usually not yet `ready`; TensorBoard needs
+    upwards of 20s to scan the log tree and bind. Callers poll GET
+    /api/training/tensorboard, so the iframe is only mounted once it will load.
+    """
+    status = tensorboard.ensure_running()
+    if not status.available:
+        raise HTTPException(status_code=501, detail=status.error)
+    if not status.running:
+        raise HTTPException(
+            status_code=500, detail=status.error or "TensorBoard failed to start."
+        )
+    return camelize(asdict(status))
+
+
+@router.post("/training/tensorboard/stop")
+def tensorboard_stop() -> dict:
+    tensorboard.stop()
+    return camelize(asdict(tensorboard.status()))

@@ -319,6 +319,52 @@ def test_parse_progress_returns_none_for_log_lines():
     assert parse_progress("Loading checkpoint /app/ckpts/A2SB_twosplit_release.ckpt") is None
 
 
+def test_second_split_only_uses_relative_index():
+    """A 0.5–1.0-only job is index 0 of 1; 10% of its bar is 10% overall."""
+    progress = progress_from_split_bar(
+        selected_index=0,
+        n_splits=1,
+        frac=0.10,
+        start_step=0,
+        until_step=100,
+        split="0.5-1.0",
+        eta_sec=None,
+    )
+    assert progress.split_index == 0
+    assert progress.split_total == 1
+    assert progress.fraction == pytest.approx(0.10)
+    assert progress.step == 10
+
+
+def test_resume_progress_interpolates_from_header_start():
+    progress = progress_from_split_bar(
+        selected_index=0,
+        n_splits=1,
+        frac=0.5,
+        start_step=1000,
+        until_step=2000,
+        split="0.0-0.5",
+        eta_sec=12.0,
+    )
+    assert progress.step == 1500
+    assert progress.max_steps == 2000
+    assert "1500/2000" in progress.stage
+    assert progress.eta_sec == 12.0
+
+
+def test_both_splits_second_bar_starts_at_half():
+    progress = progress_from_split_bar(
+        selected_index=1,
+        n_splits=2,
+        frac=0.10,
+        start_step=0,
+        until_step=20,
+        split="0.5-1.0",
+        eta_sec=None,
+    )
+    assert progress.fraction == pytest.approx(0.55)
+
+
 def test_parse_eta_seconds_minutes():
     assert parse_eta_seconds(TQDM_LINE) == 15
 
@@ -402,6 +448,46 @@ def test_run_finetune_streams_progress(tmp_path, monkeypatch):
     # Fractions must not decrease (monotone-ish within each split).
     for prev, nxt in zip(fractions[:-1], fractions[1:]):
         assert nxt >= prev - 0.01
+
+
+def test_run_finetune_second_split_only_starts_near_zero(tmp_path, monkeypatch):
+    """A 0.5–1.0-only header must not be treated as absolute split index 1 of 1."""
+    data_dir = str(tmp_path / "data")
+    out_dir = str(tmp_path / "out")
+
+    _install_fake_finetune(
+        tmp_path,
+        monkeypatch,
+        """
+        import sys, time
+        print("Split 0.5-1.0 starts at global_step=0; training until 20")
+        for i in range(1, 6):
+            sys.stdout.write(
+                f"\\rTraining: {i*20:3d}%|##| {i}/5 [00:01<00:0{5-i}, 1.0s/it]"
+            )
+            sys.stdout.flush()
+            time.sleep(0.02)
+        print("\\nDone.")
+        """,
+    )
+
+    reports: list = []
+
+    def on_progress(p):
+        reports.append(p)
+
+    kwargs = _base_run_kwargs(data_dir, out_dir)
+    kwargs["splits"] = SPLIT_SECOND
+    kwargs["on_progress"] = on_progress
+    run_finetune(**kwargs)
+
+    assert reports, "expected tqdm progress from the second-split-only stub"
+    first = reports[0]
+    assert first.split_index == 0
+    assert first.split_total == 1
+    assert first.fraction == pytest.approx(0.20, abs=0.05)
+    assert reports[-1].fraction == pytest.approx(1.0, abs=0.05)
+    assert reports[-1].step == 20
 
 
 def test_run_finetune_raises_on_failure(tmp_path, monkeypatch):

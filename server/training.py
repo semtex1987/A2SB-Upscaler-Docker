@@ -254,13 +254,50 @@ def preflight(splits: str, training_data_dir: Optional[str] = None) -> list[str]
 @dataclass
 class TrainingProgress:
     split: str                          # e.g. "0.0-0.5"
-    split_index: int                    # 0 or 1
+    split_index: int                    # 0-based among *selected* splits
     split_total: int                    # 1 or 2
     step: int
     max_steps: int
     stage: str
     fraction: float                     # overall 0..1
     eta_sec: Optional[float]
+
+
+def progress_from_split_bar(
+    *,
+    selected_index: int,
+    n_splits: int,
+    frac: float,
+    start_step: int,
+    until_step: int,
+    split: str,
+    eta_sec: Optional[float],
+) -> TrainingProgress:
+    """Map one selected-split tqdm bar onto overall job progress.
+
+    ``selected_index`` is the 0-based order among the splits this job actually
+    trains (so a 0.5–1.0-only run is index 0 of 1, not index 1 of 1). ``frac``
+    is that bar's 0..1 fill. The displayed step interpolates from the header's
+    resume offset to its ``until`` target so a resumed run does not sit at the
+    starting global_step for the whole bar.
+    """
+    span = max(until_step - start_step, 0)
+    if span <= 0:
+        current_step = until_step
+    else:
+        current_step = start_step + int(round(frac * span))
+        current_step = min(max(current_step, start_step), until_step)
+    overall = (selected_index + frac) / max(n_splits, 1)
+    return TrainingProgress(
+        split=split,
+        split_index=selected_index,
+        split_total=n_splits,
+        step=current_step,
+        max_steps=until_step,
+        stage=f"Split {split} — step {current_step}/{until_step}",
+        fraction=min(max(overall, 0.0), 1.0),
+        eta_sec=eta_sec,
+    )
 
 
 def run_finetune(
@@ -277,8 +314,13 @@ def run_finetune(
     on_log: LogSink,
     on_progress: Callable[[TrainingProgress], None],
     cancel_event: threading.Event,
+    tensorboard: bool = True,
+    until_step: Optional[int] = None,
 ) -> None:
     """Launch finetune.py as a subprocess and stream its output.
+
+    `finetune.py` always writes metrics.csv; `tensorboard` additionally emits
+    event files so the Train tab can hand them to a TensorBoard process.
 
     Raises `TrainingCancelled` if cancelled, `TrainingError` on failure.
     """
@@ -296,12 +338,13 @@ def run_finetune(
         command += ["--val-every", str(val_every)]
     if val_samples is not None:
         command += ["--val-samples", str(val_samples)]
+    if until_step is not None:
+        command += ["--until-step", str(until_step)]
     if restart:
         command.append("--restart")
-
-    # Force CSVLogger so metrics.csv is guaranteed (configs set logger: null,
-    # which Lightning resolves to TensorBoard if installed, CSV otherwise).
-    command += ["--", "--trainer.logger=CSVLogger"]
+    command += ["--export-dir", str(finetuned_checkpoint_dir())]
+    if tensorboard:
+        command.append("--tensorboard")
 
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
@@ -328,6 +371,7 @@ def run_finetune(
     state = {
         "split": "",
         "split_index": 0,
+        "headers_seen": 0,
         "split_step": 0,
         "split_max": steps,
         "eta_sec": None,
@@ -362,27 +406,30 @@ def run_finetune(
             state["split"] = f"{lo}-{hi}"
             state["split_step"] = int(header.group(3))
             state["split_max"] = int(header.group(4))
-            # Derive split index from lo: "0.0" -> 0, "0.5" -> 1.
-            state["split_index"] = 0 if lo == "0.0" else 1
+            state["split_index"] = state["headers_seen"]
+            state["headers_seen"] += 1
+            on_log(line)
+            continue
+
+        lowered = line.lower()
+        if "validation" in lowered or "sanity check" in lowered:
             on_log(line)
             continue
 
         frac = parse_progress(line)
         if frac is not None:
             state["eta_sec"] = parse_eta_seconds(line)
-            # Overall = splits done + current fraction of current split.
-            done_splits = state["split_index"]
-            overall = (done_splits + frac) / n_splits
-            on_progress(TrainingProgress(
-                split=state["split"],
-                split_index=state["split_index"],
-                split_total=n_splits,
-                step=state["split_step"],
-                max_steps=state["split_max"],
-                stage=f"Split {state['split']} — step {state['split_step']}/{state['split_max']}",
-                fraction=min(max(overall, 0.0), 1.0),
-                eta_sec=state["eta_sec"],
-            ))
+            on_progress(
+                progress_from_split_bar(
+                    selected_index=state["split_index"],
+                    n_splits=n_splits,
+                    frac=frac,
+                    start_step=state["split_step"],
+                    until_step=state["split_max"],
+                    split=state["split"],
+                    eta_sec=state["eta_sec"],
+                )
+            )
         else:
             on_log(line)
 

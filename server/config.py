@@ -91,6 +91,17 @@ TRAIN_LR_DEFAULT = 5e-5
 # Two splits × (top-3 + last) ≈ 18 GB, plus some headroom.
 TRAIN_MIN_FREE_BYTES = 25 * 1024 ** 3
 
+# TensorBoard runs as a child process bound to loopback and is reached through the
+# app's own port, because deployments (docker-compose, the RunPod template) publish
+# only 7860. PATH_PREFIX must match the proxy mount and must not end in a slash.
+TENSORBOARD_PORT = int(os.environ.get("A2SB_TENSORBOARD_PORT", "6006"))
+TENSORBOARD_PATH_PREFIX = "/tensorboard"
+TENSORBOARD_HOST = "127.0.0.1"
+#: TensorBoard needs several seconds to scan the log tree and bind its port.
+TENSORBOARD_STARTUP_TIMEOUT_SEC = 45.0
+#: How often TensorBoard re-scans for new event data while training runs.
+TENSORBOARD_RELOAD_INTERVAL_SEC = 15
+
 # Spectral thresholds for dataset vetting (aligned with training/vet_dataset.py).
 VET_PASS_HZ = 20500.0     # PASS: content genuinely reaches this frequency
 VET_CHECK_HZ = 17000.0    # CHECK: between here and PASS_HZ — could be 320 kbps

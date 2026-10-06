@@ -8,6 +8,8 @@ import time
 
 import pytest
 
+from pathlib import Path
+
 from server import inference
 from server.inference import (
     InferenceCancelled,
@@ -35,6 +37,24 @@ def test_ordinary_log_lines_report_no_progress():
 
 def test_progress_is_clamped_to_the_unit_interval():
     assert _parse_progress("Predicting: 120%|###|") == 1.0
+
+
+def test_sampling_loop_tqdm_is_parsed():
+    """Inference progress comes from the diffusion-step bar, not Lightning's 1/1 predict bar."""
+    line = "Sampling:  40%|####      | 20/50 [00:08<00:12,  2.5it/s]"
+    assert _parse_progress(line) == pytest.approx(0.40)
+
+
+def test_api_sampler_wraps_the_diffusion_loop_in_tqdm():
+    """The GUI inference module must emit a per-step Sampling bar, not a silent range()."""
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "nvidia-a2sb-original-repo"
+        / "A2SB_lightning_module_api.py"
+    )
+    text = source.read_text()
+    assert 'tqdm(range(n_steps)' in text
+    assert 'desc="Sampling"' in text
 
 
 @pytest.mark.parametrize(
@@ -85,7 +105,7 @@ def test_cutoff_is_passed_in_hz_not_normalised(tmp_path, monkeypatch, input_dir)
     import shutil; shutil.copy(args.infile, args.outfile)
     """,
     )
-    monkeypatch.setattr(inference, "is_likely_corrupted_audio", lambda _path: False)
+    monkeypatch.setattr(inference, "is_likely_corrupted_audio", lambda _path, **_kwargs: False)
 
     run_a2sb_inference(
         input_path=str(source),
@@ -120,7 +140,7 @@ def test_progress_streams_while_the_process_runs(tmp_path, monkeypatch, input_di
     import shutil; shutil.copy(args.infile, args.outfile)
     """,
     )
-    monkeypatch.setattr(inference, "is_likely_corrupted_audio", lambda _path: False)
+    monkeypatch.setattr(inference, "is_likely_corrupted_audio", lambda _path, **_kwargs: False)
 
     seen: list[tuple] = []
     run_a2sb_inference(
@@ -235,3 +255,15 @@ def test_cancelling_stops_the_process_group(tmp_path, monkeypatch, input_dir):
     time.sleep(0.5)
     with pytest.raises(OSError):
         os.kill(child_pid, 0)
+
+
+def test_api_module_drops_the_unused_template_and_emits_sampling_progress():
+    src = (
+        Path(__file__).resolve().parent.parent
+        / "nvidia-a2sb-original-repo"
+        / "A2SB_lightning_module_api.py"
+    ).read_text(encoding="utf-8")
+    assert "self.vf_model = nn.Identity()" in src
+    assert "tqdm(range(n_steps)" in src
+    assert "input_audio = self.vocode_stft" not in src
+    assert "breakpoint()" not in src
