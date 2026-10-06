@@ -137,6 +137,7 @@ pip install -q --no-cache-dir \
     pyyaml==6.0.2 \
     matplotlib==3.10.0 \
     librosa==0.11.0 \
+    soxr==0.5.0.post1 \
     soundfile==0.13.1 \
     einops==0.8.1 \
     rotary_embedding_torch==0.8.9 \
