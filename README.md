@@ -1,5 +1,6 @@
 # A2SB Audio Restoration Wrapper
-![Docker Automated build](https://img.shields.io/docker/automated/semtex87/a2sb-upscaler)
+![Docker Automated build]([https://img.shields.io/docker/automated/semtex87/a2sb-upscaler](https://img.shields.io/docker/automated/semtex87/a2sb-upscaler?style=for-the-badge&logo=docker)) 
+
 
 This repository provides a Dockerized interface for [NVIDIA's Audio-to-Audio Schrödinger Bridges (A2SB)](https://github.com/NVIDIA/diffusion-audio-restoration), a diffusion-based model for audio restoration and bandwidth extension. It wraps the upstream inference code in a FastAPI service and a React web app with stereo support, measured cutoff suggestions, live job progress, and A/B evaluation of the result.
 
