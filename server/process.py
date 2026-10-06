@@ -10,6 +10,7 @@ import os
 import re
 import signal
 import subprocess
+from pathlib import Path
 from typing import Generator, Optional
 
 
@@ -64,16 +65,65 @@ def iter_output_lines(stream) -> Generator[str, None, None]:
         yield buffer.decode("utf-8", errors="replace")
 
 
-def terminate_tree(process: subprocess.Popen) -> None:
-    """Stop a subprocess and any children it spawned in the same process group."""
+def process_group_members(pgid: int) -> list[int]:
+    """PIDs that currently belong to ``pgid`` (Linux ``/proc``; empty elsewhere)."""
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return []
+    members: list[int] = []
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            text = (entry / "stat").read_text()
+        except OSError:
+            continue
+        close = text.rfind(")")
+        if close == -1:
+            continue
+        fields = text[close + 2 :].split()
+        # After ``comm``: state, ppid, pgrp.
+        if len(fields) < 3:
+            continue
+        try:
+            if int(fields[2]) == pgid:
+                members.append(int(entry.name))
+        except ValueError:
+            continue
+    return members
+
+
+def terminate_tree(process: subprocess.Popen, grace_sec: float = 10.0) -> None:
+    """Stop a subprocess and any children it spawned in the same process group.
+
+    SIGTERM is sent to the group first. After the parent exits — or after a
+    bounded grace period — remaining group members are SIGKILL'd. A child that
+    ignores SIGTERM must not keep the GPU after the job is marked cancelled.
+    """
     try:
-        os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+        pgid = os.getpgid(process.pid)
+    except (ProcessLookupError, PermissionError, OSError):
+        return
+    try:
+        os.killpg(pgid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError):
         return
     try:
-        process.wait(timeout=10)
+        process.wait(timeout=grace_sec)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
+        pass
+    remaining = process_group_members(pgid)
+    if not remaining:
+        return
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        for pid in remaining:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+    try:
+        process.wait(timeout=min(grace_sec, 2.0))
+    except (subprocess.TimeoutExpired, ProcessLookupError):
+        pass

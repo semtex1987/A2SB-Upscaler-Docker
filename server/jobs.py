@@ -144,6 +144,50 @@ class Job:
         return (total / len(self.files)) if known else None
 
 
+_REPLACEABLE_EVENT_TYPES = frozenset({"log", "progress"})
+_KEEP_EVENT_TYPES = frozenset({"job", "snapshot"})
+
+
+def enqueue_event(queue: asyncio.Queue, event: dict[str, Any]) -> None:
+    """Put an SSE event without raising ``QueueFull``.
+
+    Replaceable log/progress events are coalesced (newest of that type wins).
+    Job and snapshot events always replace an older replaceable item so a
+    connected GUI cannot miss a terminal state.
+    """
+    try:
+        queue.put_nowait(event)
+        return
+    except asyncio.QueueFull:
+        pass
+    pending: list[dict[str, Any]] = []
+    while True:
+        try:
+            pending.append(queue.get_nowait())
+        except asyncio.QueueEmpty:
+            break
+    kind = event.get("type")
+    if kind in _REPLACEABLE_EVENT_TYPES:
+        pending = [item for item in pending if item.get("type") != kind]
+        pending.append(event)
+    else:
+        pending.append(event)
+    capacity = queue.maxsize if queue.maxsize > 0 else len(pending)
+    while len(pending) > capacity:
+        drop_at = next(
+            (i for i, item in enumerate(pending) if item.get("type") in _REPLACEABLE_EVENT_TYPES),
+            0,
+        )
+        if drop_at == len(pending) - 1 and kind in _KEEP_EVENT_TYPES and len(pending) > 1:
+            drop_at = 0
+        pending.pop(drop_at)
+    for item in pending:
+        try:
+            queue.put_nowait(item)
+        except asyncio.QueueFull:
+            break
+
+
 class EventBroker:
     """Fan-out to SSE subscribers across the thread boundary."""
 
@@ -164,7 +208,7 @@ class EventBroker:
             targets = list(self._subscribers)
         for loop, queue in targets:
             try:
-                loop.call_soon_threadsafe(queue.put_nowait, event)
+                loop.call_soon_threadsafe(enqueue_event, queue, event)
             except RuntimeError:
                 # The subscriber's loop has closed; its unsubscribe will follow.
                 pass
@@ -213,35 +257,16 @@ class JobStore:
         for job_file in sorted(self.runs_dir.glob("*/job.json")):
             try:
                 raw = snakeize(json.loads(job_file.read_text()))
-            except (OSError, json.JSONDecodeError):
+            except (OSError, json.JSONDecodeError) as exc:
+                print(f"[jobs] skipping unreadable {job_file}: {exc}", file=sys.stderr)
+                self._quarantine_job_file(job_file, exc)
                 continue
-            known_fields = set(JobFile.__dataclass_fields__)
-            files = [
-                JobFile(**{k: v for k, v in entry.items() if k in known_fields})
-                for entry in raw.get("files", [])
-            ]
-            kind = raw.get("kind", JOB_KIND_RESTORE)
-            train_params_raw = raw.get("train_params")
-            train_params: Optional[TrainParams] = None
-            if train_params_raw and isinstance(train_params_raw, dict):
-                known_tp = set(TrainParams.__dataclass_fields__)
-                train_params = TrainParams(**{k: v for k, v in train_params_raw.items() if k in known_tp})
-            job = Job(
-                id=raw["id"],
-                created_at=raw.get("created_at", 0.0),
-                steps=raw.get("steps", 50),
-                batch_size=raw.get("batch_size", 16),
-                files=files,
-                kind=kind,
-                status=raw.get("status", INTERRUPTED),
-                started_at=raw.get("started_at"),
-                finished_at=raw.get("finished_at"),
-                error=raw.get("error"),
-                train_params=train_params,
-                train_stage=raw.get("train_stage", ""),
-                train_fraction=raw.get("train_fraction"),
-                train_eta_sec=raw.get("train_eta_sec"),
-            )
+            try:
+                job = self._job_from_record(raw)
+            except (KeyError, TypeError, ValueError, AttributeError) as exc:
+                print(f"[jobs] skipping invalid {job_file}: {exc}", file=sys.stderr)
+                self._quarantine_job_file(job_file, exc)
+                continue
             if job.status in (QUEUED, RUNNING):
                 job.status = INTERRUPTED
                 job.finished_at = job.finished_at or time.time()

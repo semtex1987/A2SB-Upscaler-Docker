@@ -13,7 +13,7 @@ from starlette.requests import Request
 
 from server import jobs as jobs_module
 from server.config import CUTOFF_MAX_HZ, STEPS_MAX
-from server.jobs import EventBroker
+from server.jobs import EventBroker, enqueue_event
 from server.main import create_app
 from server.pipeline import FileResult
 
@@ -303,3 +303,31 @@ def test_the_broker_fans_events_out_to_every_subscriber():
         {"type": "log", "line": "hello"},
         {"type": "log", "line": "hello"},
     ]
+
+
+def test_enqueue_keeps_terminal_job_when_the_queue_is_full():
+    queue: asyncio.Queue = asyncio.Queue(maxsize=2)
+    enqueue_event(queue, {"type": "log", "line": "1"})
+    enqueue_event(queue, {"type": "log", "line": "2"})
+    enqueue_event(queue, {"type": "log", "line": "3"})
+    enqueue_event(queue, {"type": "job", "status": "completed"})
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+    assert any(item.get("type") == "job" for item in events)
+    logs = [item for item in events if item.get("type") == "log"]
+    assert logs
+    assert logs[-1]["line"] == "3"
+
+
+def test_training_preflight_keeps_structured_problems(client, input_dir):
+    """The GUI must receive `detail.problems`, not a flattened status string."""
+    response = client.post(
+        "/api/training/jobs",
+        json={"dataDir": str(input_dir), "steps": 100, "batchSize": 2, "splits": "both"},
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert isinstance(detail, dict)
+    assert isinstance(detail["problems"], list)
+    assert detail["problems"]
