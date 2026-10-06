@@ -93,6 +93,12 @@ VET_CHECK_HZ = 17000.0    # CHECK: between here and PASS_HZ — could be 320 kbp
 #: 14-22 kHz band the tool exists to reconstruct.
 SPECTROGRAM_WIDTH = 900
 SPECTROGRAM_HEIGHT = 448
+#: Cap decode/STFT work for hour-long files. A 1-hour 44.1 kHz STFT at hop 512
+#: is ~2.5 GB before pooling; we decode at most this many seconds and enlarge
+#: the hop so frames stay near the display width.
+ANALYSIS_MAX_SECONDS = 180.0
+ANALYSIS_MAX_STFT_FRAMES = SPECTROGRAM_WIDTH * 4
+ANALYSIS_MAX_CONCURRENT = 2
 
 #: Rolling in-memory log retained per job; the full log is also written to disk.
 LOG_RING_SIZE = _read_int_env("A2SB_LOG_RING_SIZE", 400)

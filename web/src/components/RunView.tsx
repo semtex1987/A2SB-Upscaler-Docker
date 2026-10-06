@@ -116,7 +116,7 @@ function JobCard({
       />
       <PanelBody className="space-y-3">
         {job.files.map((file) => (
-          <FileProgressRow key={`${job.id}-${file.sourcePath}`} file={file} />
+          <FileProgressRow key={`${job.id}-${file.id || file.sourcePath}`} file={file} />
         ))}
 
         <div className="border-t border-stroke pt-3">

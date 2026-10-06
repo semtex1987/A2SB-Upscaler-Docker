@@ -84,6 +84,8 @@ def restore_file(
     on_progress: ProgressCallback,
     on_log: LogCallback,
     cancel_event: threading.Event,
+    display_name: Optional[str] = None,
+    ensemble_config: Optional[str] = None,
 ) -> FileResult:
     started = time.monotonic()
     run_dir.mkdir(parents=True, exist_ok=True)

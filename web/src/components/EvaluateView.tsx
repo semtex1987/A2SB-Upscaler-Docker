@@ -29,7 +29,7 @@ export function EvaluateView({ jobs, focusJobId }: EvaluateViewProps) {
         job.files
           .filter((file) => file.result !== null)
           .map((file) => ({
-            key: `${job.id}:${file.sourcePath}`,
+            key: `${job.id}:${file.id || file.sourcePath}`,
             jobId: job.id,
             finishedAt: file.finishedAt,
             result: file.result!,

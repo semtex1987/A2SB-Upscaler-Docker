@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+from pathlib import Path
 
 import pytest
 import soundfile as sf
@@ -120,6 +121,34 @@ def test_upload_of_an_undecodable_file_never_reports_a_blank_error(client):
 
     assert body["files"] == []
     assert body["errors"][0]["error"].strip()
+
+
+def _wav_bytes(cutoff_hz: float) -> io.BytesIO:
+    buffer = io.BytesIO()
+    sf.write(buffer, brickwalled(cutoff_hz), SAMPLE_RATE, format="WAV", subtype="PCM_16")
+    buffer.seek(0)
+    return buffer
+
+
+def test_upload_keeps_duplicate_filenames_as_distinct_files(client):
+    """Two parts named same.wav must not share a destination path."""
+    body = client.post(
+        "/api/uploads",
+        files=[
+            ("files", ("same.wav", _wav_bytes(8000), "audio/wav")),
+            ("files", ("same.wav", _wav_bytes(16000), "audio/wav")),
+        ],
+    ).json()
+
+    assert body["errors"] == []
+    assert len(body["files"]) == 2
+    paths = [entry["path"] for entry in body["files"]]
+    assert paths[0] != paths[1]
+    assert all(Path(path).is_file() for path in paths)
+    assert Path(paths[0]).read_bytes() != Path(paths[1]).read_bytes()
+    assert [entry["name"] for entry in body["files"]] == ["same.wav", "same.wav"]
+    # The original filename is a display label, not the on-disk identity.
+    assert Path(paths[0]).name != "same.wav" or Path(paths[0]).parent != Path(paths[1]).parent
 
 
 # -- jobs ------------------------------------------------------------------

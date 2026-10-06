@@ -6,6 +6,7 @@ import glob
 import json
 import os
 import shutil
+import threading
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -17,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from server.analysis import analyze_source, peak_envelope, spectrogram_payload
 from server.config import (
+    ANALYSIS_MAX_CONCURRENT,
     AUDIO_EXTENSIONS,
     BATCH_DEFAULT,
     BATCH_MAX,
@@ -56,6 +58,7 @@ from server.training import (
 )
 
 router = APIRouter(prefix="/api")
+_ANALYSIS_SLOTS = threading.Semaphore(ANALYSIS_MAX_CONCURRENT)
 
 UPLOAD_DIR = INPUT_DIR / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -154,7 +157,8 @@ def upload_files(files: list[UploadFile]) -> dict:
             )
             continue
 
-        destination = batch_dir / name
+        suffix = Path(name).suffix.lower()
+        destination = batch_dir / f"{uuid.uuid4().hex}{suffix}"
         try:
             with destination.open("wb") as handle:
                 shutil.copyfileobj(upload.file, handle, length=1024 * 1024)
@@ -162,7 +166,7 @@ def upload_files(files: list[UploadFile]) -> dict:
             upload.file.close()
 
         try:
-            analyses.append(analyze_source(str(destination)).to_dict())
+            analyses.append(analyze_source(str(destination), display_name=name).to_dict())
         except Exception as exc:  # noqa: BLE001 - one bad file must not fail the batch
             destination.unlink(missing_ok=True)
             errors.append({"name": name, "error": _describe(exc)})
@@ -362,13 +366,15 @@ def download(path: str) -> FileResponse:
 @router.get("/spectrogram")
 def get_spectrogram(path: str, maxSeconds: Optional[float] = None) -> dict:
     resolved = _resolve_media_path(path)
-    return spectrogram_payload(str(resolved), max_seconds=maxSeconds)
+    with _ANALYSIS_SLOTS:
+        return spectrogram_payload(str(resolved), max_seconds=maxSeconds)
 
 
 @router.get("/waveform")
 def get_waveform(path: str, buckets: int = 1600) -> dict:
     resolved = _resolve_media_path(path)
-    return peak_envelope(str(resolved), buckets=max(200, min(buckets, 4000)))
+    with _ANALYSIS_SLOTS:
+        return peak_envelope(str(resolved), buckets=max(200, min(buckets, 4000)))
 
 
 # --------------------------------------------------------------------------

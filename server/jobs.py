@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import threading
 import time
 import uuid
@@ -50,11 +51,28 @@ JOB_KIND_RESTORE = "restore"
 JOB_KIND_TRAIN = "train"
 
 
+def validated_display_name(name: str) -> str:
+    """Keep the original filename as a label; never as a path component."""
+    base = Path(str(name)).name.strip()
+    if not base or base in {".", ".."}:
+        return "audio"
+    return base
+
+
+def entry_output_dirname(entry_id: str) -> str:
+    """Directory name for one batch entry. Rejects path punctuation from disk records."""
+    cleaned = "".join(ch for ch in entry_id if ch.isalnum() or ch in "-_")
+    return cleaned or uuid.uuid4().hex
+
+
 @dataclass
 class JobFile:
     name: str
     source_path: str
     cutoff_hz: int
+    #: Immutable per-entry identity. Output directories are keyed by this, not
+    #: by a sanitized display name, so equal basenames cannot overwrite each other.
+    id: str = ""
     status: str = QUEUED
     stage: str = "Queued"
     fraction: Optional[float] = None
@@ -233,13 +251,60 @@ class JobStore:
                 self._jobs[job.id] = job
                 self._logs[job.id] = deque(self._read_log(job.id), maxlen=LOG_RING_SIZE)
 
+    @staticmethod
+    def _quarantine_job_file(job_file: Path, exc: BaseException) -> None:
+        dest = job_file.with_name(job_file.name + ".invalid")
+        try:
+            job_file.replace(dest)
+            print(f"[jobs] quarantined {job_file} -> {dest}: {exc}", file=sys.stderr)
+        except OSError as rename_exc:
+            print(f"[jobs] could not quarantine {job_file}: {rename_exc}", file=sys.stderr)
+
+    @staticmethod
+    def _job_from_record(raw: dict[str, Any]) -> Job:
+        job_id = raw.get("id")
+        if not job_id or not isinstance(job_id, str):
+            raise ValueError("missing or invalid id")
+        known_fields = set(JobFile.__dataclass_fields__)
+        files = [
+            JobFile(**{k: v for k, v in entry.items() if k in known_fields})
+            for entry in raw.get("files", [])
+            if isinstance(entry, dict)
+        ]
+        kind = raw.get("kind", JOB_KIND_RESTORE)
+        train_params_raw = raw.get("train_params")
+        train_params: Optional[TrainParams] = None
+        if train_params_raw and isinstance(train_params_raw, dict):
+            known_tp = set(TrainParams.__dataclass_fields__)
+            train_params = TrainParams(
+                **{k: v for k, v in train_params_raw.items() if k in known_tp}
+            )
+        return Job(
+            id=job_id,
+            created_at=raw.get("created_at", 0.0),
+            steps=raw.get("steps", 50),
+            batch_size=raw.get("batch_size", 16),
+            files=files,
+            kind=kind,
+            status=raw.get("status", INTERRUPTED),
+            started_at=raw.get("started_at"),
+            finished_at=raw.get("finished_at"),
+            error=raw.get("error"),
+            train_params=train_params,
+            train_stage=raw.get("train_stage", ""),
+            train_fraction=raw.get("train_fraction"),
+            train_eta_sec=raw.get("train_eta_sec"),
+            model_identity=raw.get("model_identity"),
+        )
+
     # -- submission --------------------------------------------------------
 
     def submit(self, files: Iterable[dict], steps: int, batch_size: int) -> Job:
         job_id = uuid.uuid4().hex[:12]
         job_files = [
             JobFile(
-                name=entry["name"],
+                id=uuid.uuid4().hex,
+                name=validated_display_name(entry["name"]),
                 source_path=entry["source_path"],
                 cutoff_hz=int(entry["cutoff_hz"]),
             )
@@ -388,13 +453,15 @@ class JobStore:
             try:
                 result: FileResult = restore_file(
                     source_path=entry.source_path,
-                    run_dir=run_dir / Path(entry.name).stem.replace(" ", "_"),
+                    run_dir=run_dir / entry_output_dirname(entry.id),
                     steps=job.steps,
                     cutoff_hz=entry.cutoff_hz,
                     batch_size=job.batch_size,
                     on_progress=on_progress,
                     on_log=on_log,
                     cancel_event=cancel_event,
+                    display_name=entry.name,
+                    ensemble_config=ensemble_config,
                 )
             except InferenceCancelled:
                 entry.status = CANCELLED

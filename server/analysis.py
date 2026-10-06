@@ -17,6 +17,8 @@ import numpy as np
 import soundfile as sf
 
 from server.config import (
+    ANALYSIS_MAX_SECONDS,
+    ANALYSIS_MAX_STFT_FRAMES,
     CUTOFF_MAX_HZ,
     CUTOFF_MIN_HZ,
     SPECTROGRAM_HEIGHT,
@@ -177,8 +179,12 @@ def _suggest_cutoff(edge_hz: float, shelf: bool, sr: int) -> tuple[int, str, str
     return max(CUTOFF_MIN_HZ, min(CUTOFF_MAX_HZ, cutoff)), verdict, note
 
 
-def analyze_source(path: str) -> SourceAnalysis:
-    """Measure a source file so the UI can pre-fill a cutoff instead of guessing."""
+def analyze_source(path: str, display_name: Optional[str] = None) -> SourceAnalysis:
+    """Measure a source file so the UI can pre-fill a cutoff instead of guessing.
+
+    ``display_name`` is the original filename shown in the UI. Storage paths
+    for uploads are unique identifiers and are not a substitute for that label.
+    """
     try:
         info = sf.info(path)
         duration = float(info.duration)
@@ -197,7 +203,7 @@ def analyze_source(path: str) -> SourceAnalysis:
 
     return SourceAnalysis(
         path=path,
-        name=os.path.basename(path),
+        name=display_name or os.path.basename(path),
         size_bytes=os.path.getsize(path),
         duration_sec=duration,
         sample_rate=sample_rate,
@@ -237,15 +243,26 @@ def spectrogram_payload(path: str, max_seconds: Optional[float] = None) -> dict:
     """A linear-frequency STFT reduced to a uint8 grid the browser can draw.
 
     A linear axis is deliberate: a mel scale squashes 14-22 kHz into the top few
-    bands, hiding exactly the region A2SB regenerates.
+    bands, hiding exactly the region A2SB regenerates. Level is referenced to
+    full scale (1.0), not each file's own peak, so silence is dark and two
+    comparison panels stay comparable. Stereo files use the per-bin maximum
+    across channels so a hard-panned side is still visible.
     """
-    y, sr = librosa.load(path, sr=None, mono=True, duration=max_seconds)
-    duration = float(len(y) / sr) if sr else 0.0
+    cap = ANALYSIS_MAX_SECONDS if max_seconds is None else max(1.0, min(float(max_seconds), ANALYSIS_MAX_SECONDS))
+    y, sr = librosa.load(path, sr=None, mono=False, duration=cap)
+    if y.ndim == 1:
+        y = y[np.newaxis, :]
+    duration = float(y.shape[-1] / sr) if sr else 0.0
 
     n_fft = 2048
-    hop_length = 512
-    spec = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=hop_length))
-    db = librosa.amplitude_to_db(spec, ref=np.max)
+    n_samples = int(y.shape[-1])
+    hop_length = max(512, int(np.ceil(n_samples / max(ANALYSIS_MAX_STFT_FRAMES, 1))))
+    spec = None
+    for channel in y:
+        mag = np.abs(librosa.stft(channel, n_fft=n_fft, hop_length=hop_length))
+        spec = mag if spec is None else np.maximum(spec, mag)
+    assert spec is not None
+    db = librosa.amplitude_to_db(spec, ref=1.0, amin=1e-10)
 
     db = _pool_time(db, SPECTROGRAM_WIDTH)
     db = _pool_freq(db, SPECTROGRAM_HEIGHT)
@@ -271,7 +288,7 @@ def peak_envelope(path: str, buckets: int = 1600) -> dict:
     Decoding a 45 MB WAV in the browser to draw a waveform is wasteful when the
     server already has librosa loaded.
     """
-    y, sr = librosa.load(path, sr=None, mono=True)
+    y, sr = librosa.load(path, sr=None, mono=True, duration=ANALYSIS_MAX_SECONDS)
     if y.size == 0:
         return {"peaks": [], "durationSec": 0.0}
 

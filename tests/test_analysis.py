@@ -8,6 +8,7 @@ import librosa
 import numpy as np
 import pytest
 
+from server.config import ANALYSIS_MAX_STFT_FRAMES
 from server.analysis import (
     analyze_source,
     median_smooth,
@@ -148,6 +149,14 @@ def test_median_smooth_is_a_noop_for_a_degenerate_window():
     assert np.array_equal(median_smooth(values, 99), values)
 
 
+def test_spectrogram_silence_is_dark(tmp_path):
+    path = write_wav(tmp_path / "silent_spec.wav", np.zeros(SAMPLE_RATE, dtype=np.float32))
+    payload = spectrogram_payload(str(path))
+    grid = np.frombuffer(base64.b64decode(payload["data"]), dtype=np.uint8)
+    assert float(grid.mean()) < 8.0
+    assert int(grid.max()) < 32
+
+
 def test_spectrogram_payload_decodes_to_the_declared_grid(transcode_wav):
     payload = spectrogram_payload(str(transcode_wav))
 
@@ -170,6 +179,27 @@ def test_spectrogram_puts_high_frequencies_at_the_top(transcode_wav):
 def test_spectrogram_honours_the_duration_limit(master_wav):
     clipped = spectrogram_payload(str(master_wav), max_seconds=1.0)
     assert clipped["durationSec"] == pytest.approx(1.0, abs=0.05)
+
+
+def test_spectrogram_enlarges_hop_for_long_files(tmp_path, monkeypatch):
+    """Hour-scale audio must not STFT at hop 512 (hundreds of thousands of frames)."""
+    hops: list[int] = []
+    original = librosa.stft
+
+    def capture(y, **kwargs):
+        hops.append(int(kwargs.get("hop_length", 0)))
+        return original(y, **kwargs)
+
+    monkeypatch.setattr(librosa, "stft", capture)
+    path = write_wav(
+        tmp_path / "long_spec.wav",
+        np.zeros(SAMPLE_RATE * 30, dtype=np.float32),
+    )
+    spectrogram_payload(str(path))
+    assert hops
+    assert min(hops) >= 512
+    n_samples = SAMPLE_RATE * 30
+    assert min(hops) >= n_samples / ANALYSIS_MAX_STFT_FRAMES - 1
 
 
 def test_peak_envelope_is_normalised_and_bounded(master_wav):

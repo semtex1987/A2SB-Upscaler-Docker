@@ -41,6 +41,7 @@ export interface FileResult {
 }
 
 export interface JobFile {
+  id: string;
   name: string;
   sourcePath: string;
   cutoffHz: number;
