@@ -283,6 +283,7 @@ export function StageView({
             size="lg"
             className="w-full"
             disabled={selected.length === 0 || submitting}
+            title={selected.length === 0 ? "Select at least one file to restore" : undefined}
             onClick={() => void onSubmit()}
           >
             {submitting ? (
@@ -328,13 +329,14 @@ function StagedFileRow({
     <li className="rounded-lg border border-stroke bg-canvas">
       <div className="flex items-start gap-3 px-4 py-3">
         <input
+          id={`select-${file.id}`}
           type="checkbox"
           checked={file.selected}
           onChange={(event) => onChange({ ...file, selected: event.target.checked })}
           aria-label={`Include ${file.name}`}
           className="mt-1 size-4 shrink-0 cursor-pointer accent-[var(--color-accent)]"
         />
-        <div className="min-w-0 flex-1">
+        <label htmlFor={`select-${file.id}`} className="min-w-0 flex-1 cursor-pointer">
           <div className="flex flex-wrap items-center gap-2">
             <p className="truncate font-medium text-ink">{file.name}</p>
             <Badge tone={verdict.tone}>{verdict.label}</Badge>
@@ -356,8 +358,8 @@ function StagedFileRow({
             {formatHz(file.hfEdgeHz)}
           </p>
           <p className="mt-1.5 text-xs leading-relaxed text-ink-muted">{file.note}</p>
-        </div>
-        <Button variant="ghost" size="icon" aria-label={`Remove ${file.name}`} onClick={onRemove}>
+        </label>
+        <Button variant="ghost" size="icon" aria-label={`Remove ${file.name}`} title="Remove file" onClick={onRemove}>
           <Trash2 className="size-4" aria-hidden />
         </Button>
       </div>
