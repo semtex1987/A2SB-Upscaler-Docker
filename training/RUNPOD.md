@@ -99,6 +99,16 @@ To iterate: edit locally, push, then `git pull` in
 `finetune.py` builds its own manifest by scanning `--data-dir` (estimating each
 file's true sample rate and dropping anything under 16 kHz), fine-tunes the two
 A2SB split checkpoints, and writes checkpoints + manifest to `--output-dir`.
+`--steps` is additional optimizer updates from the starting checkpoint;
+`--until-step` is an absolute `global_step` target. Reuse `--output-dir` only
+when you intend to resume that run. Multi-GPU (`--devices N`) uses DDP with
+a distributed sampler so each rank trains on a shard of the manifest.
+
+Prefer this repo's `training/Dockerfile.train` (PyTorch 2.1 CUDA 11.8) over an
+unpinned pod pip install. `training/setup_pod.sh` pins the same stack
+(`rotary_embedding_torch==0.8.9`, `moviepy==1.0.3`, librosa/soxr/soundfile as
+in the Dockerfiles) so a checkpoint trained on the pod loads in the inference
+image.
 
 ## 4. (Optional) re-vet on the pod
 
@@ -114,12 +124,37 @@ only if you add material. For DSD/SACD sources, decimate to 44.1 kHz first
 (`aresample=resampler=soxr` in ffmpeg) — the vetter flags raw high-rate files as
 CHECK because their ultrasonic band may be noise-shaping hash, not music.
 
-## Tracking metrics with Weights & Biases
+## Tracking metrics
 
-The base config leaves `trainer.logger` null, so Lightning falls back to
-`CSVLogger` and metrics land in `<output-dir>/split_*/lightning_logs/version_*/metrics.csv`.
-That survives fine, but not if the pod does -- W&B keeps the history off-pod,
-which matters when pods churn.
+`finetune.py` always configures `CSVLogger`, so metrics land in
+`<output-dir>/split_*/lightning_logs/version_*/metrics.csv`. It is stated
+explicitly rather than relying on Lightning's default, because that default
+switches to TensorBoard once the `tensorboard` package is present, which would
+take `metrics.csv` away.
+
+### TensorBoard
+
+Add `--tensorboard` to also write event files, to
+`<output-dir>/split_*/tensorboard/version_*/`:
+
+```bash
+python training/finetune.py --data-dir ... --output-dir ... --tensorboard
+```
+
+Point TensorBoard at the output directory to see both splits as separate runs:
+
+```bash
+tensorboard --logdir /root/training_output --host 0.0.0.0 --port 6006
+```
+
+On a pod that publishes only the app port, skip this and use the web UI's
+**Train** tab instead -- it launches TensorBoard itself and proxies it at
+`/tensorboard/`, so no extra port has to be exposed.
+
+### Weights & Biases
+
+CSV logs survive a run, but not the pod. W&B keeps the history off-pod, which
+matters when pods churn. It is additive: the CSV logs are still written.
 
 ```bash
 pip install wandb          # already in the trainer image
@@ -138,6 +173,7 @@ python training/finetune.py \
 Each split is logged as its own run (`<prefix>-split_0.0_0.5`,
 `<prefix>-split_0.5_1.0`), so `--splits both` gives two comparable curves.
 `--wandb-run-name` sets the prefix; it defaults to the output directory name.
+`--tensorboard` and `--wandb` can be combined.
 
 Note that the useful audio metrics (`val_lsd`, `val_sisdr`, the per-timestep
 `val_loss_t=*`) only appear if validation actually runs -- see `--val-samples`
