@@ -193,3 +193,22 @@ def is_likely_corrupted_audio(path: str, reference_path: Optional[str] = None) -
         pass
 
     return False
+
+
+def export_with_linked_headroom(path: str, samples: np.ndarray, sample_rate: int) -> tuple[int, float]:
+    """Write 16-bit PCM after stereo-linked peak scaling.
+
+    ``samples`` is float in any range, shape ``(n,)`` or ``(n, channels)``.
+    Both channels share one gain so the image is not rebalanced. Returns the
+    number of over-range samples before scaling and the original peak.
+    """
+    data = np.asarray(samples, dtype=np.float32)
+    if data.ndim == 1:
+        data = data[:, np.newaxis]
+    peak = float(np.max(np.abs(data))) if data.size else 0.0
+    n_over = int(np.sum(np.abs(data) > 1.0))
+    if peak > 1.0:
+        data = data / peak
+    pcm = _float_to_int16(data)
+    sf.write(path, pcm, sample_rate, subtype="PCM_16")
+    return n_over, peak

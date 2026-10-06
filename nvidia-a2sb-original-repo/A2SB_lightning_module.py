@@ -86,13 +86,18 @@ class TimePartitionedPretrainedSTFTBridgeModel(LightningModule):
         return self.t_bounded_pretrained_models[model_idx]
 
     @torch.no_grad()
-    def vocode_stft(self, spec_out):
+    def vocode_stft(self, spec_out, waveform_length=None):
         """
         # TODO move this outside of lightningmodule
         spec_out: B x C x H x W model outputs to be mapped back to waveform
         """
         # assume transforms don't support batch dimension for now
-        return [apply_audio_transforms(spec_out[b], self.inv_transforms)[0] for b in range(spec_out.shape[0])]
+        return [
+            apply_audio_transforms(
+                spec_out[b], self.inv_transforms, waveform_length=waveform_length
+            )[0]
+            for b in range(spec_out.shape[0])
+        ]
 
     @torch.no_grad()
     def ddpm_sample(self, x_1, t_steps=None, mask=None, mask_pred_x0=True,
@@ -199,8 +204,14 @@ class TimePartitionedPretrainedSTFTBridgeModel(LightningModule):
                                     mask_pred_x0=True, win_length=self.predict_win_length, hop_length=self.predict_hop_length,
                                     batch_size=self.predict_batch_size)
 
-        reconstructed_audio = self.vocode_stft(x_0s[-1].cpu())[0].cpu().data.numpy()
-        input_audio = self.vocode_stft(x_0_corrupted.cpu())[0].cpu().data.numpy()
+        wav = batch.get("x_0_wav")
+        waveform_length = int(wav.shape[-1]) if wav is not None else None
+        reconstructed_audio = self.vocode_stft(
+            x_0s[-1].cpu(), waveform_length=waveform_length
+        )[0].cpu().data.numpy()
+        input_audio = self.vocode_stft(
+            x_0_corrupted.cpu(), waveform_length=waveform_length
+        )[0].cpu().data.numpy()
         write_wav(os.path.join(current_out_dir, "recon.wav"), batch['output_sr'], reconstructed_audio)
         write_wav(os.path.join(current_out_dir, "dirty.wav"), batch['output_sr'], input_audio)
 
@@ -367,13 +378,18 @@ class STFTBridgeModel(LightningModule):
             x_t = x_t_prev
         return all_pred_x0s
     
-    def vocode_stft(self, spec_out):
+    def vocode_stft(self, spec_out, waveform_length=None):
         """
         # TODO move this outside of lightningmodule
         spec_out: B x C x H x W model outputs to be mapped back to waveform
         """
         # assume transforms don't support batch dimension for now
-        return [apply_audio_transforms(spec_out[b], self.inv_transforms)[0] for b in range(spec_out.shape[0])]
+        return [
+            apply_audio_transforms(
+                spec_out[b], self.inv_transforms, waveform_length=waveform_length
+            )[0]
+            for b in range(spec_out.shape[0])
+        ]
     
     def sample_t_bounded(self, n_samples):
         t_range = self.train_t_max - self.train_t_min

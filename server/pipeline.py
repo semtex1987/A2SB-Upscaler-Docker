@@ -10,13 +10,17 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from pydub import AudioSegment
+import numpy as np
+import soundfile as sf
 
 from server.audio import (
     apply_lowpass_to_segment,
     ensure_a2sb_input_format,
+    export_with_linked_headroom,
     high_band_rms_db,
+    is_silent_segment,
 )
-from server.config import WORK_DIR
+from server.config import MODEL_SAMPLE_RATE, WORK_DIR
 from server.inference import InferenceCancelled, InferenceError, run_a2sb_inference
 from server.serialization import camelize
 
@@ -103,7 +107,7 @@ def restore_file(
     channel_segments = [audio] if audio.channels == 1 else audio.split_to_mono()
     channel_span = INFERENCE_SHARE / len(channel_segments)
 
-    restored_channels: list[AudioSegment] = []
+    restored_floats: list[np.ndarray] = []
     filtered_channels: list[AudioSegment] = []
 
     for index, (label, segment) in enumerate(zip(channel_names, channel_segments)):
@@ -130,6 +134,13 @@ def restore_file(
             on_progress(FileProgress(stage=f"{_label}: diffusion", fraction=overall, eta_sec=eta))
 
         report(None, None)
+        if is_silent_segment(filtered):
+            on_log(f"{label}: silent channel — copying through without diffusion")
+            silent = np.array(filtered.get_array_of_samples(), dtype=np.float32)
+            if filtered.sample_width == 2:
+                silent = silent / 32768.0
+            restored_floats.append(silent)
+            continue
         try:
             run_a2sb_inference(
                 input_path=str(channel_in),
@@ -140,25 +151,33 @@ def restore_file(
                 on_log=on_log,
                 on_progress=report,
                 cancel_event=cancel_event,
+                ensemble_config=ensemble_config,
             )
         except InferenceError as exc:
             raise PipelineError(str(exc), exc.tail) from exc
         finally:
             channel_in.unlink(missing_ok=True)
 
-        restored_channels.append(AudioSegment.from_file(channel_out))
+        data, _sr = sf.read(str(channel_out), dtype="float32")
+        restored_floats.append(np.asarray(data, dtype=np.float32).reshape(-1))
         channel_out.unlink(missing_ok=True)
 
     _raise_if_cancelled(cancel_event)
     finalize_base = PREPARE_SHARE + INFERENCE_SHARE
     on_progress(FileProgress(stage="Recombining", fraction=finalize_base))
 
-    if len(restored_channels) == 1:
-        restored_channels[0].export(restored_path, format="wav")
-        filtered_channels[0].export(filtered_path, format="wav")
-    else:
-        AudioSegment.from_mono_audiosegments(*restored_channels).export(restored_path, format="wav")
-        AudioSegment.from_mono_audiosegments(*filtered_channels).export(filtered_path, format="wav")
+    if filtered_channels:
+        if len(filtered_channels) == 1:
+            filtered_channels[0].export(filtered_path, format="wav")
+        else:
+            AudioSegment.from_mono_audiosegments(*filtered_channels).export(filtered_path, format="wav")
+
+    n = min(arr.shape[0] for arr in restored_floats)
+    aligned = [arr[:n] for arr in restored_floats]
+    stacked = np.stack(aligned, axis=1) if len(aligned) > 1 else aligned[0]
+    n_over, peak = export_with_linked_headroom(
+        str(restored_path), stacked, MODEL_SAMPLE_RATE
+    )
 
     on_progress(FileProgress(stage="Measuring high-band energy", fraction=finalize_base + FINALIZE_SHARE * 0.4))
     hf_in = high_band_rms_db(str(filtered_path), cutoff_hz)
@@ -166,16 +185,22 @@ def restore_file(
     delta = hf_out - hf_in
 
     warnings: list[str] = []
+    if n_over > 0:
+        warnings.append(
+            f"{n_over} samples exceeded full scale (peak {peak:.3f}). "
+            f"Applied stereo-linked headroom of {20.0 * np.log10(peak):.1f} dB before 16-bit export."
+        )
     if delta < 1.0:
         warnings.append(
             f"The model added {delta:+.1f} dB above {cutoff_hz} Hz. The release "
-            f"checkpoints are weak above ~12 kHz; try a lower cutoff or fine-tuned weights."
+            f"checkpoints are weak above ~12 kHz; try a lower cutoff or fine-tuned weights. "
+            f"Added high-band energy is not itself proof of restoration quality."
         )
 
     on_progress(FileProgress(stage="Done", fraction=1.0))
 
     return FileResult(
-        name=os.path.basename(source_path),
+        name=display_name or os.path.basename(source_path),
         source_path=source_path,
         restored_path=str(restored_path),
         filtered_path=str(filtered_path),

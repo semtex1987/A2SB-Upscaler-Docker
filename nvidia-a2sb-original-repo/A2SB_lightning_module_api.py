@@ -84,6 +84,9 @@ class TimePartitionedPretrainedSTFTBridgeModel(LightningModule):
             return current_model
 
         self.t_bounded_pretrained_models = nn.ModuleList([_load_model(ckpt) for ckpt in pretrained_checkpoints])
+        # The template was only a construction pattern for deepcopy. Drop its
+        # parameters so Lightning does not move a third unused copy to the GPU.
+        self.vf_model = nn.Identity()
 
     @torch.no_grad()
     def get_vf_model(self, t: float):
@@ -96,13 +99,18 @@ class TimePartitionedPretrainedSTFTBridgeModel(LightningModule):
         return self.t_bounded_pretrained_models[model_idx]
 
     @torch.no_grad()
-    def vocode_stft(self, spec_out):
+    def vocode_stft(self, spec_out, waveform_length=None):
         """
         # TODO move this outside of lightningmodule
         spec_out: B x C x H x W model outputs to be mapped back to waveform
         """
         # assume transforms don't support batch dimension for now
-        return [apply_audio_transforms(spec_out[b], self.inv_transforms)[0] for b in range(spec_out.shape[0])]
+        return [
+            apply_audio_transforms(
+                spec_out[b], self.inv_transforms, waveform_length=waveform_length
+            )[0]
+            for b in range(spec_out.shape[0])
+        ]
 
     @torch.no_grad()
     def ddpm_sample(self, x_1, t_steps=None, mask=None, mask_pred_x0=True,
@@ -213,15 +221,19 @@ class TimePartitionedPretrainedSTFTBridgeModel(LightningModule):
                                     mask_pred_x0=True, win_length=self.predict_win_length, hop_length=self.predict_hop_length,
                                     batch_size=self.predict_batch_size)
 
-        reconstructed_audio = self.vocode_stft(x_0s[-1].cpu())[0].cpu().data.numpy()
-        input_audio = self.vocode_stft(x_0_corrupted.cpu())[0].cpu().data.numpy()
-        # scipy infers the WAV encoding from the array dtype; writing float32
-        # yields a 32-bit float WAV (2x the size of the 16-bit source) that the
-        # downstream pydub/ffmpeg re-export preserves. Emit 16-bit PCM instead.
-        reconstructed_int16 = (np.clip(reconstructed_audio, -1.0, 1.0) * 32767.0).astype(np.int16)
-        write_wav(self.output_audio_filename, batch['output_sr'], reconstructed_int16)
-        # write_wav(os.path.join(current_out_dir, "recon.wav"), batch['output_sr'], reconstructed_audio)
-        # write_wav(os.path.join(current_out_dir, "dirty.wav"), batch['output_sr'], input_audio)
+        wav = batch.get("x_0_wav")
+        waveform_length = int(wav.shape[-1]) if wav is not None else None
+        reconstructed_audio = self.vocode_stft(
+            x_0s[-1].cpu(), waveform_length=waveform_length
+        )[0].cpu().data.numpy()
+        # scipy infers the WAV encoding from the array dtype. Keep float32 so
+        # the server can count over-range samples and apply stereo-linked
+        # headroom before the final 16-bit export.
+        write_wav(
+            self.output_audio_filename,
+            batch['output_sr'],
+            np.asarray(reconstructed_audio, dtype=np.float32),
+        )
 
 
 class STFTBridgeModel(LightningModule):
@@ -379,13 +391,18 @@ class STFTBridgeModel(LightningModule):
             x_t = x_t_prev
         return all_pred_x0s
     
-    def vocode_stft(self, spec_out):
+    def vocode_stft(self, spec_out, waveform_length=None):
         """
         # TODO move this outside of lightningmodule
         spec_out: B x C x H x W model outputs to be mapped back to waveform
         """
         # assume transforms don't support batch dimension for now
-        return [apply_audio_transforms(spec_out[b], self.inv_transforms)[0] for b in range(spec_out.shape[0])]
+        return [
+            apply_audio_transforms(
+                spec_out[b], self.inv_transforms, waveform_length=waveform_length
+            )[0]
+            for b in range(spec_out.shape[0])
+        ]
     
     def sample_t_bounded(self, n_samples):
         t_range = self.train_t_max - self.train_t_min

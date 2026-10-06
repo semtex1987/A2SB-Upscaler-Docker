@@ -127,9 +127,10 @@ def run_a2sb_inference(
             tail="\n".join(tail),
         )
 
-    if is_likely_corrupted_audio(output_path):
+    if is_likely_corrupted_audio(output_path, reference_path=input_path):
         raise InferenceError(
-            "Inference produced audio that failed validation (silent, clipped, or "
-            "noise-like). The cutoff may be masking the entire spectrum.",
+            "Inference produced audio that failed validation (clipped, "
+            "noise-like, or silent against a non-silent input). The cutoff may "
+            "be masking the entire spectrum.",
             tail="\n".join(tail),
         )

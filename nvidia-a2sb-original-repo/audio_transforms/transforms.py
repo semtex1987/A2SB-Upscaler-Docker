@@ -52,10 +52,11 @@ def instantiate_from_ns(ns: Namespace):
     raise TypeError(f"{target} is neither a class nor a callable.")
 
 
-def apply_audio_transforms(audio: torch.Tensor, transforms: List[T]):
+def apply_audio_transforms(audio: torch.Tensor, transforms: List[T], waveform_length: Optional[int] = None):
     """
     inputs:
         audio: torch tensor of audio data. User is responsible for ensuring format matches transform function input specifications
+        waveform_length: original sample count for inverse STFT, when known
     returns:
         audio_transformed: audio after applying series of transforms
         mask: accumulation of masks
@@ -67,7 +68,10 @@ def apply_audio_transforms(audio: torch.Tensor, transforms: List[T]):
         if type(tx_fn) in [jsonargparse._namespace.Namespace]:
             tx_fn = instantiate_from_ns(tx_fn)
         
-        output = tx_fn(audio)
+        if waveform_length is not None and isinstance(tx_fn, InverseComplexSpectrogram):
+            output = tx_fn(audio, length=waveform_length)
+        else:
+            output = tx_fn(audio)
         if type(output) is tuple:
             masks.append(output[1])
             audio = output[0]
@@ -174,14 +178,15 @@ class InverseComplexSpectrogram:
                                               window_fn=torch.hann_window
                                               )
 
-    def __call__(self, spec: Tensor) -> Tensor:
+    def __call__(self, spec: Tensor, length: Optional[int] = None) -> Tensor:
         """
         spec: 2 x H X W real spectrogram tensor
+        length: original waveform sample count so the inverse STFT keeps the tail
         """
         assert(len(spec.shape) == 3), '{} shape not correct'.format(spec.shape)
         # move channels to end, then convert back to complex
         spec = torch.view_as_complex(spec.permute(1, 2, 0).contiguous())
-        return self.inv_spectrogram(spec)
+        return self.inv_spectrogram(spec, length=length)
 
 
 class PowerScaleSpectrogram:

@@ -58,6 +58,7 @@ def _restore(source, run_dir, monkeypatch, runner=None, **overrides):
         on_progress=calls.append,
         on_log=lambda _line: None,
         cancel_event=overrides.get("cancel_event", threading.Event()),
+        ensemble_config=overrides.get("ensemble_config"),
     )
     return result, calls
 
@@ -72,6 +73,55 @@ def test_a_stereo_file_is_restored_channel_by_channel(tmp_path, stereo_source, m
     stages = [entry.stage for entry in progress]
     assert any("Left" in stage for stage in stages)
     assert any("Right" in stage for stage in stages)
+
+
+def test_stereo_channels_share_the_same_ensemble_snapshot(tmp_path, stereo_source, monkeypatch):
+    seen: list[str | None] = []
+
+    def runner(*, input_path, output_path, cutoff_hz, on_log, on_progress, cancel_event, ensemble_config=None, **_kwargs):
+        seen.append(ensemble_config)
+        _fake_inference()(
+            input_path=input_path,
+            output_path=output_path,
+            cutoff_hz=cutoff_hz,
+            on_log=on_log,
+            on_progress=on_progress,
+            cancel_event=cancel_event,
+        )
+
+    _restore(
+        stereo_source,
+        tmp_path / "run",
+        monkeypatch,
+        runner=runner,
+        ensemble_config=str(tmp_path / "pinned.yaml"),
+    )
+    assert seen == [str(tmp_path / "pinned.yaml"), str(tmp_path / "pinned.yaml")]
+
+
+def test_a_silent_channel_is_copied_through_without_diffusion(tmp_path, monkeypatch):
+    left = brickwalled(11000)
+    stereo = np.stack([left, np.zeros_like(left)], axis=1)
+    source = write_wav(tmp_path / "hard_pan.wav", stereo)
+    calls: list[str] = []
+
+    def runner(*, input_path, output_path, cutoff_hz, on_log, on_progress, cancel_event, **_kwargs):
+        calls.append(input_path)
+        _fake_inference()(
+            input_path=input_path,
+            output_path=output_path,
+            cutoff_hz=cutoff_hz,
+            on_log=on_log,
+            on_progress=on_progress,
+            cancel_event=cancel_event,
+        )
+
+    result, _ = _restore(source, tmp_path / "run", monkeypatch, runner=runner)
+    assert result.channels == 2
+    assert len(calls) == 1
+    restored, rate = sf.read(result.restored_path)
+    assert restored.shape[1] == 2
+    assert float(np.max(np.abs(restored[:, 1]))) == pytest.approx(0.0, abs=1e-3)
 
 
 def test_a_mono_file_reports_a_single_channel(tmp_path, mono_source, monkeypatch):

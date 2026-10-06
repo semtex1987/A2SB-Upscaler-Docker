@@ -72,15 +72,15 @@ def multidiffusion_pad_inputs(input, win_length, hop_length, padding_constant=No
         pad_to = ceil((width - win_length)/ hop_length) * hop_length + win_length
         to_pad = pad_to - width
 
-    if to_pad > 0:
-        padding = input[..., :to_pad]
-        if padding_constant is not None:
-            padding = padding*0+padding_constant
+    if to_pad <= 0:
+        return input.clone()
 
-        input_padded = torch.cat([input, padding], dim=-1)
+    if padding_constant is not None:
+        padding = input.new_full((*input.shape[:-1], to_pad), padding_constant)
     else:
-        input_padded = input.clone()
-    return input_padded
+        repeats = (to_pad + width - 1) // width
+        padding = input.repeat(1, 1, 1, repeats)[..., :to_pad]
+    return torch.cat([input, padding], dim=-1)
 
 
 def multidiffusion_unpad_outputs(output, original_width: int):
