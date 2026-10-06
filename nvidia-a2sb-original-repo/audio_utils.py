@@ -52,7 +52,11 @@ def phase_R_to_channels(stft_R):
     if len(stft_R.shape) == 5:
         return stft_R.reshape(*stft_R.shape[:3], 4).permute(0,3,1,2)
     elif len(stft_R.shape) == 4:
-        return phase_R_to_channels(phase_R_to_channels.unsqueeze(-1))[0]
+        raise NotImplementedError(
+            "phase_R_to_channels expected a 5-D B x H x W x 2 x 2 tensor. "
+            "The 4-D branch was a leftover that called the function object "
+            "instead of the tensor (`.unsqueeze`)."
+        )
     else:
         print("unsupported dimensions")
         exit(1)

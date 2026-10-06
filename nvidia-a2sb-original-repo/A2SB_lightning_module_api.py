@@ -26,6 +26,7 @@ import copy
 import os
 from scipy.io.wavfile import write as write_wav
 from utils import find_middle_of_zero_segments
+from training_optimizer import build_radam
 
 from tqdm import tqdm
 
@@ -255,9 +256,9 @@ class STFTBridgeModel(LightningModule):
 
 
     def configure_optimizers(self):
-        optimizer = torch.optim.RAdam(self.parameters(), lr=self.learning_rate,
-                                      weight_decay=self.weight_decay, decoupled_weight_decay=True)
-        return optimizer
+        return build_radam(
+            self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay
+        )
 
     def ddpm_sample(self, x_1, t_steps=None, mask=None, mask_pred_x0=True):
         n_steps = t_steps.shape[1] - 1
@@ -413,12 +414,17 @@ class STFTBridgeModel(LightningModule):
             return None
 
         print('\nloss: {:.4f}'.format(loss.cpu().item()))
-
-        # store gradient norm
-        grad_norm = torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=0.5)
-        self.log("train/gradient_norm", grad_norm)
-        
         return loss
+
+    def on_before_optimizer_step(self, optimizer, *args, **kwargs):
+        # Lightning clips at this boundary (trainer.gradient_clip_val).
+        # clip_grad_norm_ inside training_step mutates leftover grads during
+        # accumulate_grad_batches, before the current backward even runs.
+        total = torch.tensor(0.0)
+        grads = [p.grad.detach() for p in self.parameters() if p.grad is not None]
+        if grads:
+            total = torch.norm(torch.stack([g.norm(2) for g in grads]), 2)
+        self.log("train/gradient_norm", total)
 
     @torch.no_grad()
     def test_step(self, batch, batch_idx, dataloader_idx=0):
@@ -446,8 +452,10 @@ class STFTBridgeModel(LightningModule):
         return self.test_results
 
     def predict_step(self, batch, batch_idx):
-        breakpoint()
-        print("hello")
+        raise NotImplementedError(
+            "STFTBridgeModel.predict_step is a leftover debug stub. "
+            "GUI inference uses TimePartitionedPretrainedSTFTBridgeModel."
+        )
 
     @torch.no_grad()
     def validation_step(self, batch, batch_idx, dataloader_idx=0):

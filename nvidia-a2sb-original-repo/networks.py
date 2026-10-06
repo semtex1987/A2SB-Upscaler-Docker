@@ -177,8 +177,10 @@ class Downsample(nn.Module):
                 dims, self.channels, self.out_channels, 3, stride=stride, padding=1
             )
         else:
-            assert self.channels == self.out_channels
-            self.op = avg_pool_nd(dims, kernel_size=stride, stride=stride)
+            raise NotImplementedError(
+                "Non-conv downsampling is not implemented here (avg_pool_nd is "
+                "undefined). AttnUNetF always constructs Downsample(..., use_conv=True)."
+            )
 
     def forward(self, x):
         assert x.shape[1] == self.channels
@@ -323,13 +325,13 @@ class AttnUNetF(nn.Module):
 
 
 class QKVAttention(nn.Module):
-    """
-    A module which performs QKV attention and splits in a different order.
-    """
+    """Leftover Guided-Diffusion helper. Not used by AttnUNetF (RotaryAttentionPool2d)."""
 
     def __init__(self, n_heads):
-        super().__init__()
-        self.n_heads = n_heads
+        raise NotImplementedError(
+            "QKVAttention is unused by the configured UNet; it referenced an "
+            "undefined `th` alias and count_flops_attn."
+        )
 
     def forward(self, qkv):
         """
@@ -358,9 +360,7 @@ class QKVAttention(nn.Module):
 
 
 class AttentionPool2d(nn.Module):
-    """
-    Adapted from CLIP: https://github.com/openai/CLIP/blob/main/clip/model.py
-    """
+    """Leftover CLIP-style pool. Not used by AttnUNetF (RotaryAttentionPool2d)."""
 
     def __init__(
         self,
@@ -370,7 +370,10 @@ class AttentionPool2d(nn.Module):
         output_dim: int = None,
         rotary_dims = 16
     ):
-        super().__init__()
+        raise NotImplementedError(
+            "AttentionPool2d is unused by the configured UNet; it referenced "
+            "an undefined `th` alias."
+        )
 
         #self.positional_embedding = nn.Parameter(
         #    th.randn(embed_dim, spacial_dim ** 2 + 1) / embed_dim ** 0.5
