@@ -1,11 +1,13 @@
 services:
   upsampler:
     build: .
-    image: semtex87/a2sb-upscaler
+    image: semtex87/a2sb-upscaler:latest
     container_name: nvidia_upsample
     
     ports:
-      - "7860:7860"
+      # Local default is loopback. Override with A2SB_PUBLISH_HOST=0.0.0.0 only
+      # when an authenticated reverse proxy (or RunPod's HTTP proxy) sits in front.
+      - "${A2SB_PUBLISH_HOST:-127.0.0.1}:7860:7860"
     
     volumes:
       - ./restored_audio:/app/outputs
@@ -13,10 +15,15 @@ services:
       # and activated in place; this mount is removed so training can write to that dir.
       # If you want to mount pre-existing fine-tuned checkpoints from outside the container,
       # add:  ./my_finetuned:/app/ckpts/finetuned:ro
+      # and set A2SB_FINETUNED_CKPT_DIR=/app/ckpts/finetuned.
       - ./training_data:/app/training_data
     
     environment:
       - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+      # Published ports need the process listening on all interfaces. There is
+      # no application authentication; do not expose 7860 on a public network
+      # without an authenticated reverse proxy. Path confinement is not auth.
+      - A2SB_HOST=0.0.0.0
 
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/healthz', timeout=5)"]

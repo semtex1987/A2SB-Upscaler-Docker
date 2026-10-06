@@ -54,6 +54,7 @@ RUN pip install --no-cache-dir \
     scipy==1.15.3 \
     matplotlib==3.10.0 \
     librosa==0.11.0 \
+    soxr==0.5.0.post1 \
     soundfile==0.13.1 \
     einops==0.8.1 \
     pytorch_lightning==2.5.0 \

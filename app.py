@@ -15,7 +15,7 @@ from server.main import app  # noqa: F401  - imported so `app.py:app` also works
 def main() -> None:
     uvicorn.run(
         "server.main:app",
-        host=os.environ.get("A2SB_HOST", "0.0.0.0"),
+        host=os.environ.get("A2SB_HOST", "127.0.0.1"),
         port=int(os.environ.get("A2SB_PORT", "7860")),
         log_level=os.environ.get("A2SB_LOG_LEVEL", "info"),
         # A single worker is required: the job store keeps queue state in
