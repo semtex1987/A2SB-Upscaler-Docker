@@ -6,6 +6,8 @@ is already stubbed in test_inference.py.
 """
 from __future__ import annotations
 
+import ast
+import csv
 import io
 import os
 import shutil
@@ -17,7 +19,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 import yaml
+from torch.utils.data import TensorDataset
+from torch.utils.data.distributed import DistributedSampler
 
 from server.process import parse_eta_seconds, parse_progress
 from server.training import (
@@ -28,14 +33,20 @@ from server.training import (
     TrainingError,
     activate_checkpoints,
     checkpoint_status,
+    _header_duration_sec,
     preflight,
+    progress_from_split_bar,
     read_training_metrics,
+    atomic_write_text,
     revert_to_release,
     run_finetune,
+    snapshot_ensemble_config,
     vet_dataset,
 )
 
 from .conftest import SAMPLE_RATE, brickwalled, full_bandwidth, write_wav
+from training.eligibility import LOADER_MIN_TRUE_SR
+from training.finetune import build_manifest, per_rank_epoch_batches, planned_max_steps
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +93,14 @@ def test_vet_returns_duration_and_size(tmp_path):
     assert r.size_bytes > 0
 
 
+def test_vet_duration_uses_header_not_the_decode_window(tmp_path):
+    path = write_wav(tmp_path / "long.wav", full_bandwidth(seconds=4.0))
+    decoded_window_samples = SAMPLE_RATE  # 1 second of a 4 second file
+    assert _header_duration_sec(str(path), decoded_window_samples, SAMPLE_RATE) == pytest.approx(
+        4.0, abs=0.1
+    )
+
+
 def test_multiple_files_all_vetted(tmp_path):
     files = [
         write_wav(tmp_path / "a.wav", full_bandwidth()),
@@ -92,6 +111,193 @@ def test_multiple_files_all_vetted(tmp_path):
     verdicts = {r.name: r.verdict for r in results}
     assert verdicts["a.wav"] == "pass"
     assert verdicts["b.wav"] == "reject"
+
+
+def _pure_tone(seconds: float = 4.0, hz: float = 1000.0) -> np.ndarray:
+    t = np.arange(int(SAMPLE_RATE * seconds), dtype=np.float64) / SAMPLE_RATE
+    return (0.5 * np.sin(2 * np.pi * hz * t)).astype(np.float32)
+
+
+def test_gui_vetting_rejects_files_the_loader_would_drop(tmp_path):
+    """A 1 kHz tone can look like it has HF energy to a spectral-edge scan
+    while the trainer's rolloff estimate is a few kHz; both must reject it.
+    """
+    path = write_wav(tmp_path / "tone.wav", _pure_tone())
+    result = vet_dataset([str(path)])[0]
+    assert result.verdict == "reject"
+    assert "Trainer would drop" in result.note
+
+
+def test_manifest_excludes_ineligible_files_before_the_split(tmp_path):
+    data = tmp_path / "data"
+    out = tmp_path / "out"
+    write_wav(data / "keep_a.wav", full_bandwidth(seconds=4.0))
+    write_wav(data / "keep_b.wav", full_bandwidth(seconds=4.0))
+    write_wav(data / "tone.wav", _pure_tone())
+
+    manifest, n_segments = build_manifest(data, out, val_frac=0.1, seed=0)
+    rows = list(csv.reader(manifest.open(), delimiter=","))
+    header, body = rows[0], rows[1:]
+    assert header == ["split", "filepath", "duration", "estimated_true_sr"]
+    names = [Path(row[1]).name for row in body]
+    assert "tone.wav" not in names
+    assert set(names) == {"keep_a.wav", "keep_b.wav"}
+    assert {row[0] for row in body} == {"train", "validation"}
+    assert n_segments >= 1
+    # The loader's apply_sr_loss_mask skip uses this same threshold.
+    assert all(int(row[3]) >= LOADER_MIN_TRUE_SR for row in body)
+    assert any(row[0] == "train" for row in body)
+    assert any(row[0] == "validation" for row in body)
+    datasets_src = (
+        Path(__file__).resolve().parent.parent
+        / "nvidia-a2sb-original-repo"
+        / "datasets"
+        / "datasets.py"
+    ).read_text(encoding="utf-8")
+    assert f"MIN_TRUE_SR_HZ = {LOADER_MIN_TRUE_SR}" in datasets_src
+    assert "offset=offset" in datasets_src
+    assert "duration=duration" in datasets_src
+    assert "% 99" not in datasets_src
+
+
+def test_manifest_refuses_a_set_that_only_contains_ineligible_files(tmp_path):
+    data = tmp_path / "data"
+    write_wav(data / "tone.wav", _pure_tone())
+    with pytest.raises(SystemExit, match="No training-eligible"):
+        build_manifest(data, tmp_path / "out")
+
+
+def test_read_standard_csv_skips_rows_the_trainer_gate_would_drop(tmp_path):
+    """Import just the CSV filter from datasets.py — the full module needs torchaudio."""
+    vendor = (
+        Path(__file__).resolve().parent.parent
+        / "nvidia-a2sb-original-repo"
+        / "datasets"
+        / "datasets.py"
+    )
+    tree = ast.parse(vendor.read_text(encoding="utf-8"))
+    wanted = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "MIN_TRUE_SR_HZ" for t in node.targets
+        ):
+            wanted.append(node)
+        if isinstance(node, ast.FunctionDef) and node.name in {
+            "read_standard_csv",
+            "require_nonempty_split",
+        }:
+            wanted.append(node)
+    ns = {"os": os, "csv": csv}
+    exec(compile(ast.Module(body=wanted, type_ignores=[]), str(vendor), "exec"), ns)
+    read_standard_csv = ns["read_standard_csv"]
+    require_nonempty_split = ns["require_nonempty_split"]
+
+    manifest = tmp_path / "finetune_manifest.csv"
+    manifest.write_text(
+        "split,filepath,duration,estimated_true_sr\n"
+        "train,/keep.wav,10.0000,44100\n"
+        "train,/tone.wav,10.0000,2153\n"
+        "validation,/val.wav,10.0000,44100\n",
+        encoding="utf-8",
+    )
+    kept = read_standard_csv(str(tmp_path), "finetune_manifest.csv", apply_sr_loss_mask=True)
+    assert [row[0] for row in kept["train"]] == ["/keep.wav"]
+    assert [row[0] for row in kept["validation"]] == ["/val.wav"]
+    unfiltered = read_standard_csv(
+        str(tmp_path), "finetune_manifest.csv", apply_sr_loss_mask=False
+    )
+    assert len(unfiltered["train"]) == 2
+
+    with pytest.raises(ValueError, match="0 samples"):
+        require_nonempty_split("train", 0)
+    require_nonempty_split("train", 1)
+    require_nonempty_split("test", 0)
+
+
+def _fake_trained_ckpt() -> dict:
+    return {
+        "optimizer_states": [{"step": 1}],
+        "lr_schedulers": [{}],
+        "global_step": 12,
+        "state_dict": {},
+    }
+
+
+def _fake_start_ckpt() -> dict:
+    return {
+        "optimizer_states": [],
+        "lr_schedulers": [],
+        "global_step": 0,
+        "state_dict": {},
+    }
+
+
+def test_export_refuses_a_folder_that_only_has_the_start_checkpoint(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parent.parent / "training"))
+    import torch
+    from finetune import copy_final_checkpoints
+
+    split = tmp_path / "split"
+    split.mkdir()
+    torch.save(_fake_start_ckpt(), split / "finetune_start.ckpt")
+    assert copy_final_checkpoints(split, tmp_path / "dest", "finetuned.ckpt") is False
+    assert not (tmp_path / "dest" / "finetuned.ckpt").exists()
+
+
+def test_export_prefers_last_ckpt_and_ignores_a_newer_start_stub(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parent.parent / "training"))
+    import torch
+    from finetune import copy_final_checkpoints
+
+    split = tmp_path / "split"
+    split.mkdir()
+    torch.save(_fake_trained_ckpt(), split / "last.ckpt")
+    time.sleep(0.02)
+    torch.save(_fake_start_ckpt(), split / "finetune_start.ckpt")
+    dest = tmp_path / "dest"
+    assert copy_final_checkpoints(split, dest, "finetuned.ckpt") is True
+    exported = torch.load(dest / "finetuned.ckpt", map_location="cpu", weights_only=False)
+    assert exported["global_step"] == 12
+
+
+def test_export_refuses_stale_zero_step_artifacts(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parent.parent / "training"))
+    import torch
+    from finetune import copy_final_checkpoints
+
+    split = tmp_path / "split"
+    split.mkdir()
+    torch.save(_fake_start_ckpt(), split / "epoch=0-iter_0.ckpt")
+    assert copy_final_checkpoints(split, tmp_path / "dest", "finetuned.ckpt") is False
+
+
+def test_steps_are_additional_unless_until_step_is_absolute():
+    assert planned_max_steps(resumed_step=0, additional_steps=5000, until_step=None) == 5000
+    assert planned_max_steps(resumed_step=3000, additional_steps=5000, until_step=None) == 8000
+    assert planned_max_steps(resumed_step=3000, additional_steps=5000, until_step=4000) == 4000
+
+
+def test_ddp_yaml_enables_the_distributed_sampler():
+    for name in ("finetune_split1.yaml", "finetune_split2.yaml"):
+        cfg = yaml.safe_load(
+            (Path(__file__).resolve().parent.parent / "training" / "configs" / name).read_text()
+        )
+        assert cfg["trainer"]["use_distributed_sampler"] is True
+
+
+def test_per_rank_epoch_batches_accounts_for_world_size():
+    assert per_rank_epoch_batches(100, batch_size=2, devices=1) == 50
+    assert per_rank_epoch_batches(100, batch_size=2, devices=2) == 25
+    assert per_rank_epoch_batches(3, batch_size=2, devices=8) == 1
+
+
+def test_distributed_sampler_gives_ranks_distinct_indices():
+    data = TensorDataset(torch.arange(16))
+    rank0 = list(DistributedSampler(data, num_replicas=2, rank=0, shuffle=False))
+    rank1 = list(DistributedSampler(data, num_replicas=2, rank=1, shuffle=False))
+    assert rank0
+    assert rank1
+    assert set(rank0).isdisjoint(set(rank1))
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +489,6 @@ def test_activate_checkpoints_rewrites_config(tmp_path, monkeypatch):
     _make_finetuned_ckpts(ft_dir)
 
     monkeypatch.setattr("server.training.ENSEMBLE_CONFIG_PATH", str(config_path))
-    monkeypatch.setattr("server.training.FINETUNED_CKPT_DIR", str(ft_dir))
     monkeypatch.setattr("server.training.TRAINING_CKPT_DIR", str(ckpt_dir))
 
     n = activate_checkpoints(str(ft_dir))
@@ -294,6 +499,37 @@ def test_activate_checkpoints_rewrites_config(tmp_path, monkeypatch):
     assert all("finetuned" in c for c in ckpts)
 
 
+def test_ensemble_snapshot_is_unaffected_by_a_later_activation(tmp_path, monkeypatch):
+    ckpt_dir = tmp_path / "ckpts"
+    ckpt_dir.mkdir()
+    config_path = _make_ensemble_yaml(ckpt_dir)
+    ft_dir = tmp_path / "finetuned"
+    _make_finetuned_ckpts(ft_dir)
+
+    monkeypatch.setattr("server.training.ENSEMBLE_CONFIG_PATH", str(config_path))
+    monkeypatch.setattr("server.training.TRAINING_CKPT_DIR", str(ckpt_dir))
+
+    snap = tmp_path / "job" / "ensemble.yaml"
+    identity = snapshot_ensemble_config(snap)
+    assert identity["active"] == "release"
+    assert snap.is_file()
+    before = snap.read_text(encoding="utf-8")
+
+    activate_checkpoints(str(ft_dir))
+    assert snap.read_text(encoding="utf-8") == before
+    live = yaml.safe_load(config_path.read_text())
+    assert all("finetuned" in c for c in live["model"]["pretrained_checkpoints"])
+
+
+def test_atomic_write_replaces_the_target_without_a_partial_file(tmp_path):
+    target = tmp_path / "ensemble.yaml"
+    atomic_write_text(target, "first: 1\n")
+    atomic_write_text(target, "second: 2\n")
+    assert target.read_text(encoding="utf-8") == "second: 2\n"
+    leftovers = list(tmp_path.glob(".ensemble.yaml.*.tmp"))
+    assert leftovers == []
+
+
 def test_revert_to_release_restores_original_paths(tmp_path, monkeypatch):
     ckpt_dir = tmp_path / "ckpts"
     ckpt_dir.mkdir()
@@ -302,7 +538,6 @@ def test_revert_to_release_restores_original_paths(tmp_path, monkeypatch):
     _make_finetuned_ckpts(ft_dir)
 
     monkeypatch.setattr("server.training.ENSEMBLE_CONFIG_PATH", str(config_path))
-    monkeypatch.setattr("server.training.FINETUNED_CKPT_DIR", str(ft_dir))
     monkeypatch.setattr("server.training.TRAINING_CKPT_DIR", str(ckpt_dir))
 
     activate_checkpoints(str(ft_dir))
@@ -321,7 +556,6 @@ def test_checkpoint_status_reads_active_state(tmp_path, monkeypatch):
     _make_finetuned_ckpts(ft_dir)
 
     monkeypatch.setattr("server.training.ENSEMBLE_CONFIG_PATH", str(config_path))
-    monkeypatch.setattr("server.training.FINETUNED_CKPT_DIR", str(ft_dir))
     monkeypatch.setattr("server.training.TRAINING_CKPT_DIR", str(ckpt_dir))
 
     status = checkpoint_status()
@@ -340,11 +574,32 @@ def test_activate_returns_zero_when_no_finetuned_ckpts_exist(tmp_path, monkeypat
     empty_ft_dir.mkdir()
 
     monkeypatch.setattr("server.training.ENSEMBLE_CONFIG_PATH", str(config_path))
-    monkeypatch.setattr("server.training.FINETUNED_CKPT_DIR", str(empty_ft_dir))
     monkeypatch.setattr("server.training.TRAINING_CKPT_DIR", str(ckpt_dir))
 
     n = activate_checkpoints(str(empty_ft_dir))
     assert n == 0
+
+
+def test_activation_discovers_training_exports_without_a_second_path(tmp_path, monkeypatch):
+    """finetune.py writes to <output-dir>/checkpoints; Activate must find them there."""
+    release = tmp_path / "release"
+    release.mkdir()
+    config_path = _make_ensemble_yaml(release)
+    training_out = tmp_path / "training"
+    export = training_out / "checkpoints"
+    _make_finetuned_ckpts(export)
+
+    monkeypatch.setattr("server.training.ENSEMBLE_CONFIG_PATH", str(config_path))
+    monkeypatch.setattr("server.training.TRAINING_CKPT_DIR", str(release))
+    monkeypatch.setattr("server.training.TRAINING_OUTPUT_DIR", training_out)
+    monkeypatch.delenv("A2SB_FINETUNED_CKPT_DIR", raising=False)
+
+    n = activate_checkpoints()
+    assert n == 2
+    ckpts = yaml.safe_load(config_path.read_text())["model"]["pretrained_checkpoints"]
+    assert all(str(export) in path for path in ckpts)
+    status = checkpoint_status()
+    assert len(status.finetuned_paths) == 2
 
 
 # ---------------------------------------------------------------------------

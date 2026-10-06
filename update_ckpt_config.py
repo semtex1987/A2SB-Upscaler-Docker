@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-If fine-tuned checkpoints are mounted at /app/ckpts/finetuned/, update the
-ensemble config to use them instead of the release checkpoints.
+If fine-tuned checkpoints are present under the training export directory
+(`$A2SB_TRAINING_OUTPUT_DIR/checkpoints`, default `/app/outputs/training/checkpoints`),
+or at `$A2SB_FINETUNED_CKPT_DIR`, point the ensemble config at them instead of
+the release checkpoints.
 
 The two checkpoints cover different halves of the diffusion trajectory
 (t 0.0-0.5 and t 0.5-1.0) and BOTH run on every restoration, so they are
@@ -12,8 +14,13 @@ is swapped in; anything missing keeps the release checkpoint it already had.
 import os
 import sys
 
-CONFIG_PATH = "/app/configs/ensemble_2split_sampling.yaml"
-FINETUNED_DIR = "/app/ckpts/finetuned"
+CONFIG_PATH = os.environ.get("A2SB_ENSEMBLE_CONFIG", "/app/configs/ensemble_2split_sampling.yaml")
+_OUTPUT = os.environ.get("A2SB_OUTPUT_DIR", "/app/outputs")
+_TRAINING_OUT = os.environ.get("A2SB_TRAINING_OUTPUT_DIR", os.path.join(_OUTPUT, "training"))
+FINETUNED_DIR = os.environ.get(
+    "A2SB_FINETUNED_CKPT_DIR",
+    os.path.join(_TRAINING_OUT, "checkpoints"),
+)
 # index in pretrained_checkpoints -> fine-tuned filename for that split
 SPLIT_CKPTS = [
     "A2SB_twosplit_0.0_0.5_finetuned.ckpt",

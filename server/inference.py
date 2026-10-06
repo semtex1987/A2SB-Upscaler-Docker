@@ -39,6 +39,7 @@ def run_a2sb_inference(
     on_log: LogSink,
     on_progress: ProgressSink,
     cancel_event: threading.Event,
+    ensemble_config: Optional[str] = None,
 ) -> None:
     """Run one channel through A2SB, streaming progress until it finishes.
 
@@ -61,6 +62,8 @@ def run_a2sb_inference(
     env = os.environ.copy()
     env["PYTHONPATH"] = PYTHONPATH_FOR_INFERENCE
     env["PYTHONUNBUFFERED"] = "1"
+    if ensemble_config:
+        env["A2SB_ENSEMBLE_CONFIG"] = ensemble_config
 
     on_log(f"$ {' '.join(command)}")
 

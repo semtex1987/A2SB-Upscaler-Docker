@@ -19,6 +19,24 @@ from corruption.corruptions import UpsampleMask as UpsampleMask
 
 T = TypeVar("T")
 
+#: Files below this estimated true sample rate are dropped when
+#: ``apply_sr_loss_mask`` is on. Must match ``training.eligibility.LOADER_MIN_TRUE_SR``.
+MIN_TRUE_SR_HZ = 32000
+#: Extra audio decoded on each side of a segment so resampling has context.
+SEGMENT_LOAD_CONTEXT_SEC = 0.05
+
+
+def require_nonempty_split(split, n_samples):
+    """Fail fast when a train/validation loader would have zero segments."""
+    if n_samples == 0 and split in ("train", "validation"):
+        raise ValueError(
+            "MixAudioDataset split={!r} has 0 samples after apply_sr_loss_mask "
+            "filtering (need estimated_true_sr >= {}). Add eligible audio or "
+            "rebuild the manifest with the trainer-gate filter.".format(
+                split, MIN_TRUE_SR_HZ
+            )
+        )
+
 def read_maestro_csv(root_folder, filename):
     all_files = {
         "train": [],
@@ -59,7 +77,7 @@ def read_standard_csv(root_folder, filename, max_sr=44100, apply_sr_loss_mask=Fa
                 if apply_sr_loss_mask == False:
                     estimated_true_sr = max_sr
                 else:
-                    if int(estimated_true_sr) < 32000:
+                    if int(estimated_true_sr) < MIN_TRUE_SR_HZ:
                         # avoid all-zero masks when cutoff is sampled to be max (16khz)
                         continue
             split = split.strip()
@@ -125,6 +143,7 @@ class MixAudioDataset(torch.utils.data.Dataset):
             self.mapped_list = self.mapped_list[:max_samples]
 
         print("Loaded {} samples for {} split".format(len(self.mapped_list), split))
+        require_nonempty_split(split, len(self.mapped_list))
 
     def build_file_idx_mapping(self, verbose=False):
         # map between sample index and each audio based on segment_length and their duration
@@ -142,14 +161,26 @@ class MixAudioDataset(torch.utils.data.Dataset):
         return len(self.mapped_list)
 
     def load_wav_to_torch(self, audiopath, start_time=None, end_time=None):
-        audio, sr = librosa.load(audiopath, sr=None)
+        # Decode only the requested segment plus a short resampling context
+        # instead of the whole track on every __getitem__.
+        offset = 0.0
+        duration = None
+        if start_time is not None and end_time is not None:
+            offset = max(0.0, float(start_time) - SEGMENT_LOAD_CONTEXT_SEC)
+            duration = (float(end_time) - offset) + SEGMENT_LOAD_CONTEXT_SEC
+        audio, sr = librosa.load(audiopath, sr=None, offset=offset, duration=duration)
         if len(audio.shape) != 1:
             audio = librosa.to_mono(audio.T)  # (L, 2) -> (2, L) -> mono-channel
         if sr != self.sampling_rate:
             audio = librosa.resample(audio, orig_sr=sr, target_sr=self.sampling_rate)
+            working_sr = self.sampling_rate
+        else:
+            working_sr = sr
 
-        crop_start = floor(start_time * self.sampling_rate)
-        crop_start = max(0, min(crop_start, len(audio) - self.segment_length))
+        crop_start = 0
+        if start_time is not None:
+            crop_start = floor((float(start_time) - offset) * working_sr)
+            crop_start = max(0, min(crop_start, max(len(audio) - self.segment_length, 0)))
 
         audio = audio[crop_start:crop_start+self.segment_length]
         if len(audio) < self.segment_length:
@@ -194,8 +225,16 @@ class MixAudioDataset(torch.utils.data.Dataset):
         try:
             dic = self.unstable_getitem(index)
         except Exception as e:
+            # Not a supported recovery path: skip this index rather than
+            # wrapping modulo 99 (which is unrelated to dataset length).
             print('sample {} cannot be loaded due to {}'.format(index, e))
-            dic = self.unstable_getitem((index+42)%99)
+            n = len(self.mapped_list)
+            if n <= 1:
+                raise
+            fallback = (index + 1) % n
+            if fallback == index:
+                raise
+            dic = self.unstable_getitem(fallback)
 
         return dic
 

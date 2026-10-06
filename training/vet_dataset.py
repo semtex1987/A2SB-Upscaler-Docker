@@ -27,8 +27,10 @@ Per-file columns in each report.csv:
   native_sr   : the file's real sample rate.
   est_true_sr : the SAME value training/finetune.py::estimate_true_sr computes
                 (2x the 95th-percentile spectral rolloff, capped at 44100).
-                Files below 32000 are dropped by the apply_sr_loss_mask filter
-                during training; trainer_gate reflects that.
+                Files below 32000 are excluded by `finetune.py` before the
+                train/validation split (and would also be dropped by
+                MixAudioDataset when apply_sr_loss_mask is on); trainer_gate
+                reflects that.
   rolloff95   : the underlying 95th-percentile rolloff frequency (Hz).
   hf_edge     : highest frequency carrying real energy (Hz), measured from the
                 95th-PERCENTILE-over-time spectrum (not the mean).  The
@@ -68,10 +70,20 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from training.eligibility import (
+    LOADER_MIN_TRUE_SR,
+    estimate_true_sr_from_array,
+    spectral_rolloff_95,
+)
+
 AUDIO_EXTENSIONS = {".wav", ".flac", ".mp3", ".ogg", ".m4a", ".aiff", ".aif"}
 
-GATE_HZ = 32000        # matches apply_sr_loss_mask exclusion in finetune.py
-EST_LOAD_SEC = 60.0    # matches estimate_true_sr() window in finetune.py
+GATE_HZ = LOADER_MIN_TRUE_SR  # MixAudioDataset drops files below this when apply_sr_loss_mask is on
+EST_LOAD_SEC = 60.0    # matches training.eligibility.estimate_true_sr() window
 ANALYSIS_SEC = 180.0   # window for the hf-edge spectral scan
 
 # --- authenticity-mode thresholds -----------------------------------------
@@ -106,13 +118,11 @@ def find_audio_in_dir(folder: Path) -> list[Path]:
 
 
 def estimate_true_sr(y, sr, np, librosa) -> tuple[int, float]:
-    """Identical logic to training/finetune.py::estimate_true_sr (first 60 s,
-    95th percentile of per-frame 0.99 rolloff, doubled, capped at 44100)."""
+    """Same estimator as training.eligibility (first 60 s). Returns (true_sr, rolloff95)."""
+    del np, librosa  # kept in the signature so analyze() can pass its lazy imports
     seg = y[: int(EST_LOAD_SEC * sr)] if len(y) > int(EST_LOAD_SEC * sr) else y
-    # ⚡ Bolt: Increase hop_length/n_fft to avoid default 75% overlap overhead
-    rolloff_frames = librosa.feature.spectral_rolloff(y=seg, sr=sr, roll_percent=0.99, n_fft=2048, hop_length=2048)
-    rolloff = float(np.percentile(rolloff_frames, 95))
-    return int(min(2 * rolloff, 44100)), rolloff
+    rolloff = spectral_rolloff_95(seg, int(sr))
+    return estimate_true_sr_from_array(seg, int(sr)), rolloff
 
 
 def median_smooth(values, np, window):

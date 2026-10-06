@@ -1,4 +1,6 @@
-# Fine-tune A2SB split 1 (t in [0.0, 0.5]) - single GPU
+# Fine-tune A2SB split 1 (t in [0.0, 0.5])
+# Default is one GPU. --devices N (N>1) enables DDP; use_distributed_sampler
+# must stay true so ranks receive disjoint shards.
 # Manifest path is overridden by finetune.py via CLI (mix_dataset_config.CURATED).
 seed_everything: 42
 trainer:
@@ -33,7 +35,7 @@ trainer:
   deterministic: null
   benchmark: null
   inference_mode: true
-  use_distributed_sampler: false
+  use_distributed_sampler: true
   profiler: null
   detect_anomaly: false
   barebones: false

@@ -9,6 +9,7 @@ always agree.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -23,7 +24,6 @@ import yaml
 from server.analysis import spectral_scan
 from server.config import (
     ENSEMBLE_CONFIG_PATH,
-    FINETUNED_CKPT_DIR,
     TRAIN_MIN_FREE_BYTES,
     TRAINING_APP_ROOT,
     TRAINING_CKPT_DIR,
@@ -31,6 +31,11 @@ from server.config import (
     TRAINING_SCRIPT,
     VET_CHECK_HZ,
     VET_PASS_HZ,
+)
+from training.eligibility import (
+    LOADER_MIN_TRUE_SR,
+    estimate_true_sr_from_array,
+    is_loader_eligible,
 )
 from server.process import (
     iter_output_lines,
@@ -40,6 +45,7 @@ from server.process import (
 )
 
 import librosa
+import soundfile as sf
 
 LogSink = Callable[[str], None]
 ProgressSink = Callable[[float, Optional[float]], None]
@@ -56,7 +62,6 @@ _FINETUNED_NAMES = [
 
 # finetune.py announces per-split progress like:
 #   "Split 0.0-0.5 starts at global_step=N; training until M"
-import re
 _SPLIT_HEADER_RE = re.compile(
     r"Split\s+([\d.]+)-([\d.]+)\s+starts at global_step=(\d+);\s+training until (\d+)"
 )
@@ -89,38 +94,64 @@ class VetResult:
     note: str
 
 
+def _header_duration_sec(path: str, samples: int, sr: int) -> float:
+    """Full file duration from metadata; fall back to the decoded window length."""
+    try:
+        info = sf.info(path)
+        if info.duration and info.duration > 0:
+            return float(info.duration)
+    except (OSError, RuntimeError, ValueError):
+        pass
+    if sr > 0:
+        return float(samples / sr)
+    return 0.0
+
+
 def vet_file(path: str) -> VetResult:
     """Vet a single audio file for training suitability.
 
     Reuses `spectral_scan` from `server/analysis.py` with vet_dataset.py's
-    thresholds so the UI and the CLI tool always agree.
+    thresholds so the UI and the CLI tool always agree. Spectral verdicts are
+    heuristics from a bounded decode; duration is read from the file header.
     """
     p = Path(path)
     y, sr = librosa.load(path, sr=None, mono=True, duration=120.0)
     edge_hz, shelf = spectral_scan(y, int(sr))
+    true_sr = estimate_true_sr_from_array(y, int(sr))
     size_bytes = p.stat().st_size
-    duration_sec = float(len(y) / sr)
+    duration_sec = _header_duration_sec(path, len(y), int(sr))
 
-    if edge_hz >= VET_PASS_HZ:
+    if not is_loader_eligible(true_sr):
+        verdict = "reject"
+        note = (
+            f"Trainer would drop this file (estimated true rate {true_sr} Hz, "
+            f"need >= {LOADER_MIN_TRUE_SR} Hz / 16 kHz of real bandwidth). "
+            "Spectral estimates are heuristics, not a provenance proof."
+        )
+    elif edge_hz >= VET_PASS_HZ:
         verdict = "pass"
-        note = f"Content runs to {edge_hz / 1000:.1f} kHz — genuinely full-bandwidth."
+        note = (
+            f"Heuristic: content runs to {edge_hz / 1000:.1f} kHz — looks like "
+            "genuine full-bandwidth material."
+        )
     elif edge_hz >= VET_CHECK_HZ:
         verdict = "check"
         note = (
-            f"Content to {edge_hz / 1000:.1f} kHz — could be a genuine dark master "
-            f"or a 320 kbps transcode. Check the shelf flag and listen."
+            f"Heuristic: content to {edge_hz / 1000:.1f} kHz — could be a genuine "
+            "dark master or a 320 kbps transcode. Check the shelf flag and listen."
         )
     else:
         verdict = "reject"
         if shelf:
             note = (
-                f"Brickwall cliff at {edge_hz / 1000:.1f} kHz — this is a lossy transcode. "
-                f"Training on it teaches the model to output silence above the cutoff."
+                f"Heuristic: brickwall cliff at {edge_hz / 1000:.1f} kHz — likely a "
+                "lossy transcode. Training on it teaches the model to output silence "
+                "above the cutoff."
             )
         else:
             note = (
-                f"Content only to {edge_hz / 1000:.1f} kHz — too band-limited to be useful "
-                f"training material for bandwidth extension."
+                f"Heuristic: content only to {edge_hz / 1000:.1f} kHz — too "
+                "band-limited to be useful training material for bandwidth extension."
             )
 
     return VetResult(
@@ -380,6 +411,19 @@ class CheckpointStatus:
     ensemble_config: str
 
 
+def finetuned_checkpoint_dir() -> Path:
+    """Directory training exports to and activation reads from.
+
+    Follows ``TRAINING_OUTPUT_DIR`` so tests (and jobs) that relocate the
+    training tree do not also have to pass a second, independent path.
+    ``A2SB_FINETUNED_CKPT_DIR`` remains an explicit override.
+    """
+    override = os.environ.get("A2SB_FINETUNED_CKPT_DIR")
+    if override:
+        return Path(override)
+    return Path(TRAINING_OUTPUT_DIR) / "checkpoints"
+
+
 def checkpoint_status() -> CheckpointStatus:
     """Read the ensemble YAML to report which checkpoints are active."""
     config_path = Path(ENSEMBLE_CONFIG_PATH)
@@ -391,11 +435,11 @@ def checkpoint_status() -> CheckpointStatus:
             Path(TRAINING_CKPT_DIR) / "A2SB_twosplit_0.5_1.0_release.ckpt"
         ),
     }
-    finetuned_dir = Path(FINETUNED_CKPT_DIR)
+    registry = finetuned_checkpoint_dir()
     finetuned = {
-        name: str(finetuned_dir / name)
+        name: str(registry / name)
         for name in _FINETUNED_NAMES
-        if (finetuned_dir / name).is_file()
+        if (registry / name).is_file()
     }
 
     active = "release"
@@ -419,6 +463,42 @@ def checkpoint_status() -> CheckpointStatus:
     )
 
 
+def atomic_write_text(path: Path, text: str) -> None:
+    """Replace *path* in one rename so concurrent readers never see a partial file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def snapshot_ensemble_config(dest: Path) -> dict:
+    """Copy the live ensemble YAML for one restore job.
+
+    Left and Right each spawn a new process that re-reads the config. Pinning a
+    snapshot at job start keeps both channels on the same weights even if the
+    Train tab activates a different checkpoint while the job is running.
+    """
+    src = Path(ENSEMBLE_CONFIG_PATH)
+    if not src.is_file():
+        raise TrainingError(f"Ensemble config not found: {src}")
+    text = src.read_text(encoding="utf-8")
+    atomic_write_text(dest, text)
+    data = yaml.safe_load(text) or {}
+    checkpoints = list((data.get("model") or {}).get("pretrained_checkpoints") or [])
+    n_finetuned = sum(1 for c in checkpoints if "finetuned" in str(c))
+    if n_finetuned == len(checkpoints) and checkpoints:
+        active = "finetuned"
+    elif n_finetuned > 0:
+        active = "mixed"
+    else:
+        active = "release"
+    return {
+        "active": active,
+        "config_path": str(dest.resolve()),
+        "checkpoints": [str(c) for c in checkpoints],
+    }
+
+
 def activate_checkpoints(finetuned_dir: Optional[str] = None) -> int:
     """Point the ensemble config at whatever finetuned checkpoints exist.
 
@@ -426,7 +506,7 @@ def activate_checkpoints(finetuned_dir: Optional[str] = None) -> int:
     so activation works without restarting the container (each restore spawns
     a fresh subprocess that re-reads the config).
     """
-    src_dir = Path(finetuned_dir or FINETUNED_CKPT_DIR)
+    src_dir = Path(finetuned_dir) if finetuned_dir else finetuned_checkpoint_dir()
     config_path = Path(ENSEMBLE_CONFIG_PATH)
     if not config_path.is_file():
         raise TrainingError(f"Ensemble config not found: {config_path}")
@@ -447,7 +527,9 @@ def activate_checkpoints(finetuned_dir: Optional[str] = None) -> int:
             activated += 1
 
     data["model"]["pretrained_checkpoints"] = ckpts
-    config_path.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
+    atomic_write_text(
+        config_path, yaml.dump(data, default_flow_style=False, sort_keys=False)
+    )
     return activated
 
 
@@ -463,7 +545,9 @@ def revert_to_release() -> None:
         str(ckpt_dir / "A2SB_twosplit_0.0_0.5_release.ckpt"),
         str(ckpt_dir / "A2SB_twosplit_0.5_1.0_release.ckpt"),
     ]
-    config_path.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
+    atomic_write_text(
+        config_path, yaml.dump(data, default_flow_style=False, sort_keys=False)
+    )
 
 
 # ---------------------------------------------------------------------------

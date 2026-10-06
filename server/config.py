@@ -67,8 +67,15 @@ AUDIO_EXTENSIONS = {".wav", ".flac", ".mp3", ".ogg", ".m4a", ".aiff", ".aif", ".
 TRAINING_SCRIPT = os.environ.get("A2SB_TRAINING_SCRIPT", "/app/training/finetune.py")
 TRAINING_APP_ROOT = os.environ.get("A2SB_APP_ROOT", "/app")
 TRAINING_CKPT_DIR = os.environ.get("A2SB_CKPT_DIR", "/app/ckpts")
-FINETUNED_CKPT_DIR = os.environ.get("A2SB_FINETUNED_CKPT_DIR", "/app/ckpts/finetuned")
 ENSEMBLE_CONFIG_PATH = os.environ.get("A2SB_ENSEMBLE_CONFIG", "/app/configs/ensemble_2split_sampling.yaml")
+
+#: Single artifact registry for fine-tuned weights. GUI training exports here
+#: (`<training-output>/checkpoints/`) and activation/status read the same path.
+#: Override with A2SB_FINETUNED_CKPT_DIR only when mounting a different tree.
+FINETUNED_CKPT_DIR = os.environ.get(
+    "A2SB_FINETUNED_CKPT_DIR",
+    str(TRAINING_OUTPUT_DIR / "checkpoints"),
+)
 
 TRAIN_STEPS_MIN = 100
 TRAIN_STEPS_MAX = 50000

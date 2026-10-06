@@ -23,7 +23,7 @@ from pathlib import Path
 from queue import Empty, Queue
 from typing import Any, Iterable, Optional
 
-from server.config import LOG_RING_SIZE, RUNS_DIR
+from server.config import LOG_RING_SIZE, RUNS_DIR, TRAINING_OUTPUT_DIR
 from server.inference import InferenceCancelled
 from server.pipeline import FileProgress, FileResult, PipelineError, restore_file
 from server.serialization import camelize, snakeize
@@ -32,6 +32,7 @@ from server.training import (
     TrainingError,
     TrainingProgress,
     run_finetune,
+    snapshot_ensemble_config,
 )
 
 QUEUED = "queued"
@@ -96,6 +97,8 @@ class TrainParams:
     val_every: Optional[int]
     val_samples: Optional[int]
     restart: bool
+    resume_from: Optional[str] = None
+    until_step: Optional[int] = None
 
 
 @dataclass
@@ -116,6 +119,8 @@ class Job:
     train_stage: str = ""
     train_fraction: Optional[float] = None
     train_eta_sec: Optional[float] = None
+    #: Checkpoints pinned when a restore job started (shared by L and R).
+    model_identity: Optional[dict] = None
 
     def to_dict(self) -> dict:
         data = camelize(asdict(self))
@@ -328,8 +333,13 @@ class JobStore:
         return job
 
     def submit_training(self, params: TrainParams) -> Job:
-        """Enqueue a fine-tuning job."""
+        """Enqueue a fine-tuning job with its own output directory."""
         job_id = uuid.uuid4().hex[:12]
+        if params.resume_from:
+            params.output_dir = self.resolve_training_resume_dir(params.resume_from)
+        else:
+            params.output_dir = str(Path(TRAINING_OUTPUT_DIR) / "runs" / job_id)
+        Path(params.output_dir).mkdir(parents=True, exist_ok=True)
         job = Job(
             id=job_id,
             created_at=time.time(),
@@ -371,6 +381,21 @@ class JobStore:
     def list_jobs(self) -> list[Job]:
         with self._lock:
             return sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
+
+    def resolve_training_resume_dir(self, resume_from: str) -> str:
+        """Map a previous job id or run directory to an existing training output."""
+        job = self.get(resume_from)
+        if job is not None and job.kind == JOB_KIND_TRAIN and job.train_params:
+            return job.train_params.output_dir
+        named = Path(TRAINING_OUTPUT_DIR) / "runs" / resume_from
+        if named.is_dir():
+            return str(named.resolve())
+        candidate = Path(resume_from)
+        if candidate.is_dir():
+            return str(candidate.resolve())
+        raise ValueError(
+            f"Cannot resume training from {resume_from!r}: no matching job or run directory."
+        )
 
     def get_log(self, job_id: str) -> list[str]:
         with self._lock:
@@ -427,6 +452,20 @@ class JobStore:
 
         run_dir = self.run_dir(job.id)
         run_dir.mkdir(parents=True, exist_ok=True)
+
+        ensemble_config = None
+        if job.kind == JOB_KIND_RESTORE:
+            try:
+                job.model_identity = snapshot_ensemble_config(run_dir / "ensemble.yaml")
+                ensemble_config = job.model_identity.get("config_path")
+                self.append_log(
+                    job.id,
+                    f"Pinned ensemble config ({job.model_identity.get('active', 'unknown')}): "
+                    f"{ensemble_config}",
+                )
+                self._persist(job, force=True)
+            except Exception as exc:  # noqa: BLE001
+                self.append_log(job.id, f"Could not snapshot ensemble config: {exc}")
 
         any_failed = False
         for entry in job.files:
@@ -555,6 +594,7 @@ class JobStore:
                 on_log=on_log,
                 on_progress=on_progress,
                 cancel_event=cancel_event,
+                until_step=params.until_step,
             )
         except TrainingCancelled:
             job.train_stage = "Cancelled"

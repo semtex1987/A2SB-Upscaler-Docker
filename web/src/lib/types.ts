@@ -69,6 +69,8 @@ export interface TrainParams {
   valEvery: number | null;
   valSamples: number | null;
   restart: boolean;
+  resumeFrom: string | null;
+  untilStep: number | null;
 }
 
 /** A restoration job — runs inference per file. */
@@ -84,6 +86,11 @@ export interface RestoreJob {
   finishedAt: number | null;
   error: string | null;
   progress: number | null;
+  modelIdentity: {
+    active: string;
+    configPath: string;
+    checkpoints: string[];
+  } | null;
 }
 
 /** A training job — runs finetune.py for hours on the same GPU. */

@@ -7,12 +7,31 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import random
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import librosa
+import yaml
+
+# Configs travel with this script. Repo root is on sys.path so
+# `python training/finetune.py` and `from training.finetune import ...` both
+# resolve the shared eligibility module.
+TRAINING_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = TRAINING_DIR.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from training.eligibility import (
+    LOADER_MIN_TRUE_SR,
+    estimate_true_sr,
+    is_loader_eligible,
+    n_loader_segments,
+)
 
 # Segment length and sample rate must match the dataset config (130560 @ 44100 ≈ 2.96s)
 SEGMENT_LENGTH = 130560
@@ -34,8 +53,6 @@ CKPT_DIR = Path(os.environ.get("A2SB_CKPT_DIR", str(APP_ROOT / "ckpts")))
 CKPT_SPLIT_1 = str(CKPT_DIR / "A2SB_twosplit_0.0_0.5_release.ckpt")
 CKPT_SPLIT_2 = str(CKPT_DIR / "A2SB_twosplit_0.5_1.0_release.ckpt")
 
-# Configs travel with this script, so a cloned checkout uses its own.
-TRAINING_DIR = Path(__file__).resolve().parent
 CONFIG_SPLIT_1 = TRAINING_DIR / "configs" / "finetune_split1.yaml"
 CONFIG_SPLIT_2 = TRAINING_DIR / "configs" / "finetune_split2.yaml"
 
@@ -43,7 +60,6 @@ CONFIG_SPLIT_2 = TRAINING_DIR / "configs" / "finetune_split2.yaml"
 def get_duration(path: str) -> float:
     """Duration in seconds. Raises if the file can't be read -- the caller
     reports the reason, so a missing decoder is distinguishable from bad audio."""
-    import librosa
     return float(librosa.get_duration(path=path))
 
 
@@ -58,31 +74,19 @@ def find_audio_files(data_dir: Path) -> list[Path]:
     return sorted(out)
 
 
-def estimate_true_sr(path: str) -> int:
-    """2x the 99% spectral rolloff, capped at 44100. Band-limited training
-    files otherwise teach the model to output silence in the high band."""
-    try:
-        import librosa
-        import numpy as np
-        y, sr = librosa.load(path, sr=None, mono=True, duration=60.0)
-        # Mean of per-frame rolloff underestimates bandwidth when HF content is
-        # intermittent (quiet passages drag it down); take a high percentile.
-        # ⚡ Bolt: Increase hop_length/n_fft to avoid default 75% overlap overhead
-        rolloff_frames = librosa.feature.spectral_rolloff(y=y, sr=sr, roll_percent=0.99, n_fft=2048, hop_length=2048)
-        rolloff = float(np.percentile(rolloff_frames, 95))
-        return int(min(2 * rolloff, 44100))
-    except Exception:
-        return 44100
-
-
 def build_manifest(
     data_dir: Path,
     output_dir: Path,
     val_frac: float = 0.1,
     seed: int = 42,
 ) -> tuple[Path, int]:
-    """Scan data_dir for audio, compute durations, write manifest CSV.
-    Returns (manifest_path, n_train_segments)."""
+    """Scan data_dir for audio, keep only loader-eligible files, then split.
+
+    Eligibility is the same gate MixAudioDataset applies (estimated true
+    sample rate >= 32 kHz). Files that would contribute zero samples are
+    excluded before the train/validation split so the printed counts match
+    the actual loaders.
+    """
     data_dir = data_dir.resolve()
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -91,8 +95,7 @@ def build_manifest(
     if not files:
         raise SystemExit(f"No audio files found under {data_dir} (extensions: {AUDIO_EXTENSIONS})")
 
-    # (path, duration); skip files too short to yield at least one segment
-    rows: list[tuple[str, float]] = []
+    eligible: list[tuple[str, float, int]] = []
     for f in files:
         try:
             d = get_duration(str(f))
@@ -103,58 +106,57 @@ def build_manifest(
         if d < MIN_DURATION_SEC:
             print(f"  skip (too short {d:.1f}s < {MIN_DURATION_SEC:.1f}s): {f.name}", file=sys.stderr)
             continue
-        rows.append((str(f), d))
+        true_sr = estimate_true_sr(str(f))
+        if not is_loader_eligible(true_sr):
+            print(
+                f"  skip (trainer gate: estimated {true_sr} Hz < {LOADER_MIN_TRUE_SR} Hz): {f.name}",
+                file=sys.stderr,
+            )
+            continue
+        eligible.append((str(f), d, true_sr))
 
-    if not rows:
-        raise SystemExit("No valid audio files (readable and long enough).")
+    if not eligible:
+        raise SystemExit(
+            "No training-eligible audio files (readable, long enough, and "
+            f"estimated bandwidth >= {LOADER_MIN_TRUE_SR // 2} Hz)."
+        )
 
     random.seed(seed)
-    random.shuffle(rows)
-    n_val = max(1, int(len(rows) * val_frac))
-    n_train = len(rows) - n_val
-    train_rows = rows[:n_train]
-    val_rows = rows[n_train:]
+    random.shuffle(eligible)
+    n_val = max(1, int(len(eligible) * val_frac)) if len(eligible) > 1 else 0
+    if n_val >= len(eligible):
+        n_val = 1 if len(eligible) > 1 else 0
+    n_train = len(eligible) - n_val
+    train_rows = eligible[:n_train]
+    val_rows = eligible[n_train:]
 
     if not train_rows:
         raise SystemExit(
             "No training samples remain after the train/validation split. "
-            "Lower --val-frac or add more audio files."
+            "Lower --val-frac or add more eligible audio files."
         )
-
-    # Estimate true bandwidth for each file; warn about narrow-band files.
-    narrow_band_files: list[str] = []
-    rows_with_sr: list[tuple[str, float, int]] = []
-    for path, dur in train_rows + val_rows:
-        true_sr = estimate_true_sr(path)
-        rows_with_sr.append((path, dur, true_sr))
-        if true_sr < 32000:
-            narrow_band_files.append(f"  {path} (estimated {true_sr} Hz)")
-
-    if narrow_band_files:
-        print(
-            "WARNING: the following files have estimated bandwidth < 16 kHz "
-            "and will be excluded by the loss-mask filter:",
-            file=sys.stderr,
+    if not val_rows:
+        raise SystemExit(
+            "No validation samples remain after eligibility filtering. "
+            "Add at least two eligible files so one can be held out."
         )
-        for line in narrow_band_files:
-            print(line, file=sys.stderr)
-
-    train_sr_rows = rows_with_sr[:n_train]
-    val_sr_rows = rows_with_sr[n_train:]
 
     manifest_path = output_dir / "finetune_manifest.csv"
     with open(manifest_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f, delimiter=",", quotechar='"')
         w.writerow(["split", "filepath", "duration", "estimated_true_sr"])
-        for path, dur, true_sr in train_sr_rows:
+        for path, dur, true_sr in train_rows:
             w.writerow(["train", path, f"{dur:.4f}", str(true_sr)])
-        for path, dur, true_sr in val_sr_rows:
+        for path, dur, true_sr in val_rows:
             w.writerow(["validation", path, f"{dur:.4f}", str(true_sr)])
 
     n_train_segments = sum(
-        int(dur // (SEGMENT_LENGTH / SAMPLING_RATE + 0.001)) for _, dur, _ in train_sr_rows
+        n_loader_segments(dur, SEGMENT_LENGTH, SAMPLING_RATE) for _, dur, _ in train_rows
     )
-    print(f"Manifest: {len(train_sr_rows)} train, {len(val_sr_rows)} validation -> {manifest_path}")
+    print(
+        f"Manifest: {len(train_rows)} train, {len(val_rows)} validation "
+        f"({n_train_segments} train segments) -> {manifest_path}"
+    )
     return manifest_path, n_train_segments
 
 
@@ -248,11 +250,43 @@ def run_fit(
     subprocess.run(cmd, cwd=str(APP_ROOT), check=True)
 
 
+INIT_CHECKPOINT_NAME = "finetune_start.ckpt"
+
+
+def is_trained_checkpoint(path: Path) -> bool:
+    """True if *path* is a real training artifact, not an initialization stub.
+
+    ``prepare_finetune_checkpoint`` writes empty optimizer_states so Lightning
+    will load it. That file must never be exported as a fine-tuned weight or
+    selected for resume as if training had run.
+    """
+    if path.name == INIT_CHECKPOINT_NAME:
+        return False
+    try:
+        import torch
+
+        ckpt = torch.load(str(path), map_location="cpu", weights_only=False)
+    except Exception:
+        return False
+    opts = ckpt.get("optimizer_states")
+    sched = ckpt.get("lr_schedulers")
+    if not opts or not sched:
+        return False
+    return int(ckpt.get("global_step", 0)) > 0
+
+
 def latest_ckpt_in_dir(d: Path) -> Path | None:
-    """Return path to the latest checkpoint in d (by mtime), or None."""
+    """Latest *trained* checkpoint in d (by mtime), or None.
+
+    Initialization stubs and unreadable files are skipped so export cannot
+    label ``finetune_start.ckpt`` as a fine-tuned weight.
+    """
     if not d.is_dir():
         return None
-    ckpts = list(d.glob("*.ckpt"))
+    last = d / "last.ckpt"
+    if last.is_file() and is_trained_checkpoint(last):
+        return last
+    ckpts = [p for p in d.glob("*.ckpt") if is_trained_checkpoint(p)]
     if not ckpts:
         return None
     return max(ckpts, key=lambda p: p.stat().st_mtime)
@@ -281,23 +315,13 @@ def find_resume_checkpoint(split_dir: Path) -> Path | None:
     """
     if not split_dir.is_dir():
         return None
-    import torch
 
     candidates = sorted(
-        (p for p in split_dir.glob("*.ckpt") if p.name != "finetune_start.ckpt"),
+        (p for p in split_dir.glob("*.ckpt") if is_trained_checkpoint(p)),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
-    for p in candidates:
-        try:
-            ckpt = torch.load(str(p), map_location="cpu", weights_only=False)
-        except Exception as e:  # noqa: BLE001 - truncated/corrupt, try the next
-            print(f"  ignoring unusable checkpoint {p.name} "
-                  f"({type(e).__name__}: {e})", file=sys.stderr)
-            continue
-        if "optimizer_states" in ckpt and "lr_schedulers" in ckpt:
-            return p
-    return None
+    return candidates[0] if candidates else None
 
 
 def prepare_finetune_checkpoint(release_ckpt: Path, dest: Path) -> Path:
@@ -338,16 +362,59 @@ def prepare_finetune_checkpoint(release_ckpt: Path, dest: Path) -> Path:
     return dest
 
 
+def planned_max_steps(
+    resumed_step: int,
+    additional_steps: int,
+    until_step: int | None,
+) -> int:
+    """Lightning ``trainer.max_steps`` is an absolute global_step target.
+
+    ``--steps`` is additional work from the starting checkpoint. ``--until-step``
+    is the absolute target and wins when both are supplied.
+    """
+    if until_step is not None:
+        return int(until_step)
+    return int(resumed_step) + int(additional_steps)
+
+
+def write_run_record(path: Path, record: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def per_rank_epoch_batches(n_train_segments: int, batch_size: int, devices: int | None) -> int:
+    """Train batches one rank sees per epoch after DistributedSampler sharding."""
+    world = max(1, int(devices or 1))
+    return max(1, n_train_segments // (batch_size * world))
+
+
+def merge_run_record(path: Path, updates: dict) -> None:
+    current: dict = {}
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            loaded = {}
+        if isinstance(loaded, dict):
+            current = loaded
+    current.update(updates)
+    write_run_record(path, current)
+
+
 def copy_final_checkpoints(
     split_output_dir: Path,
     dest_dir: Path,
     name: str,
 ) -> bool:
-    """Copy the latest checkpoint from split_output_dir to dest_dir with a clear name.
-    Returns True if a checkpoint was found and copied, False otherwise."""
+    """Copy a trained checkpoint to dest_dir under the inference filename.
+
+    Initialization stubs (``finetune_start.ckpt``) and files with no completed
+    optimizer step are not exportable. Prefer Lightning's ``last.ckpt`` when
+    it is a real terminal training state.
+    """
     latest = latest_ckpt_in_dir(split_output_dir)
     if latest is None:
-        print(f"  No checkpoint found in {split_output_dir}", file=sys.stderr)
+        print(f"  No trained checkpoint found in {split_output_dir}", file=sys.stderr)
         return False
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / name
@@ -376,7 +443,22 @@ def main() -> int:
         "--steps",
         type=int,
         default=5000,
-        help="Max training steps per split",
+        help="Additional optimizer steps to take from the starting checkpoint "
+             "(global_step + N). For an absolute target, use --until-step.",
+    )
+    parser.add_argument(
+        "--until-step",
+        type=int,
+        default=None,
+        help="Absolute Lightning trainer.max_steps (global_step target). "
+             "When set, this overrides --steps.",
+    )
+    parser.add_argument(
+        "--export-dir",
+        type=Path,
+        default=None,
+        help="Directory for inference-named checkpoint copies. "
+             "Default: <output-dir>/checkpoints.",
     )
     parser.add_argument(
         "--batch-size",
@@ -464,8 +546,9 @@ def main() -> int:
     parser.add_argument(
         "--restart",
         action="store_true",
-        help="Ignore checkpoints already in the output dir and start the "
-             "fine-tune over from the release checkpoint.",
+        help="Ignore checkpoints already in this output dir and start from "
+             "the release checkpoint. New GUI jobs use a fresh directory, so "
+             "resume only happens when you point --output-dir at an existing run.",
     )
     parser.add_argument(
         "extra",
@@ -539,6 +622,23 @@ def main() -> int:
         val_frac=args.val_frac,
         seed=args.seed,
     )
+    write_run_record(
+        args.output_dir / "run.json",
+        {
+            "data_dir": str(args.data_dir.resolve()),
+            "output_dir": str(args.output_dir.resolve()),
+            "manifest": manifest_path.name,
+            "splits": args.splits,
+            "additional_steps": args.steps,
+            "until_step": args.until_step,
+            "batch_size": args.batch_size,
+            "learning_rate": args.learning_rate,
+            "restart": bool(args.restart),
+            "val_frac": args.val_frac,
+            "val_every": args.val_every,
+            "val_samples": args.val_samples,
+        },
+    )
 
     # So the datamodule can find the manifest, we pass root_folder and filename.
     # Configs reference a placeholder; we override via CLI.
@@ -546,7 +646,10 @@ def main() -> int:
     manifest_filename = manifest_path.name
 
     # Clamp val_check_interval so Lightning never raises on small datasets.
-    batches_per_epoch = max(1, n_train_segments // args.batch_size)
+    # With DDP, each rank sees about 1/world_size of the segments.
+    batches_per_epoch = per_rank_epoch_batches(
+        n_train_segments, args.batch_size, args.devices
+    )
     # val_check_interval counts BATCHES, and Lightning rejects a value larger
     # than one epoch's worth. batches_per_epoch shrinks as --batch-size grows,
     # so a --val-every that was fine at batch 2 becomes invalid at batch 16.
@@ -564,7 +667,10 @@ def main() -> int:
         common_override += ["--trainer.devices", str(args.devices)]
         # 'auto' picks a single-device strategy; multi-GPU needs DDP named.
         if args.devices > 1:
-            common_override += ["--trainer.strategy", "ddp"]
+            common_override += [
+                "--trainer.strategy", "ddp",
+                "--trainer.use_distributed_sampler", "true",
+            ]
     if args.val_samples is not None:
         common_override += ["--data.val_max_samples", str(args.val_samples)]
 
@@ -587,11 +693,25 @@ def main() -> int:
         else:
             start1 = prepare_finetune_checkpoint(Path(CKPT_SPLIT_1), out1 / "finetune_start.ckpt")
         resumed = checkpoint_global_step(start1)
-        effective_max = args.steps
-        print(f"Split 0.0-0.5 starts at global_step={resumed}; training until {effective_max}")
+        effective_max = planned_max_steps(resumed, args.steps, args.until_step)
+        print(
+            f"Split 0.0-0.5 starts at global_step={resumed}; "
+            f"training until {effective_max} "
+            f"({'absolute --until-step' if args.until_step is not None else f'+{args.steps} additional'})"
+        )
         if resumed >= effective_max:
-            print(f"  NOTE: already at/past --steps ({resumed} >= {effective_max}); "
-                  f"raise --steps to train further.", file=sys.stderr)
+            print(f"  NOTE: already at/past the target ({resumed} >= {effective_max}); "
+                  f"raise --steps or --until-step to train further.", file=sys.stderr)
+        merge_run_record(
+            args.output_dir / "run.json",
+            {
+                "split_0.0-0.5": {
+                    "start_checkpoint": str(start1),
+                    "resumed_step": resumed,
+                    "max_steps": effective_max,
+                },
+            },
+        )
         run_fit(
             CONFIG_SPLIT_1,
             start1,
@@ -615,11 +735,25 @@ def main() -> int:
         else:
             start2 = prepare_finetune_checkpoint(Path(CKPT_SPLIT_2), out2 / "finetune_start.ckpt")
         resumed = checkpoint_global_step(start2)
-        effective_max = args.steps
-        print(f"Split 0.5-1.0 starts at global_step={resumed}; training until {effective_max}")
+        effective_max = planned_max_steps(resumed, args.steps, args.until_step)
+        print(
+            f"Split 0.5-1.0 starts at global_step={resumed}; "
+            f"training until {effective_max} "
+            f"({'absolute --until-step' if args.until_step is not None else f'+{args.steps} additional'})"
+        )
         if resumed >= effective_max:
-            print(f"  NOTE: already at/past --steps ({resumed} >= {effective_max}); "
-                  f"raise --steps to train further.", file=sys.stderr)
+            print(f"  NOTE: already at/past the target ({resumed} >= {effective_max}); "
+                  f"raise --steps or --until-step to train further.", file=sys.stderr)
+        merge_run_record(
+            args.output_dir / "run.json",
+            {
+                "split_0.5-1.0": {
+                    "start_checkpoint": str(start2),
+                    "resumed_step": resumed,
+                    "max_steps": effective_max,
+                },
+            },
+        )
         run_fit(
             CONFIG_SPLIT_2,
             start2,
@@ -631,12 +765,14 @@ def main() -> int:
             data_override=write_run_override(
                 CONFIG_SPLIT_2, out2 / "data_override.yaml",
                 root_folder, manifest_filename,
+                log_dir=out2,
+                tensorboard=args.tensorboard,
                 wandb_init=wandb_init_for("split_0.5_1.0"),
             ),
         )
 
     # 3) Copy latest checkpoints to a single folder for inference
-    ckpt_dest = args.output_dir / "checkpoints"
+    ckpt_dest = Path(args.export_dir) if args.export_dir is not None else args.output_dir / "checkpoints"
     any_missing = False
     if args.splits in ("both", "0.0-0.5"):
         ok = copy_final_checkpoints(

@@ -438,6 +438,8 @@ class TrainJobRequest(BaseModel):
     val_every: Optional[int] = Field(default=None, alias="valEvery", ge=1)
     val_samples: Optional[int] = Field(default=None, alias="valSamples", ge=1)
     restart: bool = Field(default=False)
+    resume_from: Optional[str] = Field(default=None, alias="resumeFromJobId")
+    until_step: Optional[int] = Field(default=None, alias="untilStep", ge=1)
 
     model_config = {"populate_by_name": True}
 
@@ -473,8 +475,13 @@ def create_training_job(request: TrainJobRequest) -> dict:
         val_every=request.val_every,
         val_samples=request.val_samples,
         restart=request.restart,
+        resume_from=request.resume_from,
+        until_step=request.until_step,
     )
-    job = store.submit_training(params)
+    try:
+        job = store.submit_training(params)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return job.to_dict()
 
 

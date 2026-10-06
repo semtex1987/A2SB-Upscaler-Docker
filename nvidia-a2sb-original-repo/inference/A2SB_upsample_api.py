@@ -136,11 +136,15 @@ def upsample_one_sample(
     inference_config['data']['eval_transforms_aug'] = base_transform_list
     temporary_yaml_file = save_yaml(inference_config)
 
+    ensemble_yaml = os.environ.get(
+        "A2SB_ENSEMBLE_CONFIG", "configs/ensemble_2split_sampling.yaml"
+    )
+
     cmd = [
         "python",
         "ensembled_inference_api.py",
         "predict",
-        "-c", "configs/ensemble_2split_sampling.yaml",
+        "-c", ensemble_yaml,
         "-c", temporary_yaml_file.replace('../', ''),
         f"--model.predict_n_steps={predict_n_steps}",
         f"--model.predict_batch_size={predict_batch_size}",
