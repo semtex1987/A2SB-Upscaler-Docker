@@ -17,15 +17,11 @@ The app is organised around the three things you actually do, in order.
 
 **Evaluate** — The headline number is how much energy the model actually added above the cutoff. Under it, an A/B transport plays the filtered input and the restored output from the same playhead, so switching never seeks. A *solo* control high-passes both so you hear only the reconstructed band; that path is applied even if you arm solo before the first play gesture, and it is fully bypassed (not left as 20 Hz high-pass stages) when solo is off. Two media elements are not sample-synchronous: the muted side is catch-up resynced if it drifts more than 20 ms, which is a listening comparison, not a sample-accurate A/B. That is the honest test: if the band is silent or gritty, the model did not give you anything worth keeping. An interactive spectrogram wipes between input and output with a draggable handle and reads out time, frequency, and level wherever you hover.
 
-![Evaluate](assets/screenshots/evaluate_song.png)
+![Evaluate](assets/screenshots/before-after.png)
 
 **Train** — Scan and vet a directory of high-quality audio directly in the UI, configure the fine-tune (additional steps, batch size, learning rate, which splits to train), and submit a training job into the same single-slot GPU queue. Each job writes to its own `runs/<job-id>/` folder; continuing an earlier run is an explicit **Resume from** choice. Progress streams live with per-split step counts, and loss curves are plotted inline as the run proceeds. TensorBoard is one click away when you want histograms or want to compare runs; it is proxied through this same port, so there is no second port to publish. When the run finishes, click **Activate fine-tuned** in the Checkpoints panel — the ensemble config is rewritten atomically without restarting the container. The next restoration job snapshots that config so both stereo channels use the same weights even if you activate again mid-job. Click **Revert to release** any time to go back.
 
 ![Train](assets/screenshots/train_lora.png)
-
-**Before and After Feature**
-
-![Before and After](assets/screenshots/before-after.png)
 
 ## Features
 
