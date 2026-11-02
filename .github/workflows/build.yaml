@@ -35,7 +35,10 @@ jobs:
             python-multipart==0.0.20 \
             httpx==0.28.1 \
             pydub==0.25.1 \
-            tensorboard==2.20.0
+            tensorboard==2.20.0 \
+            tqdm \
+            einops \
+            "jsonargparse[signatures]==4.35.0"
       - name: Pytest
         run: python -m pytest tests/ -q --tb=short
       - name: Set up Node
