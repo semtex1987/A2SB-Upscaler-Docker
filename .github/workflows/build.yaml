@@ -36,6 +36,7 @@ jobs:
             httpx==0.28.1 \
             pydub==0.25.1 \
             tqdm \
+            einops \
             tensorboard==2.20.0
       - name: Pytest
         run: python -m pytest tests/ -q --tb=short
