@@ -222,10 +222,15 @@ def _pool_time(matrix: np.ndarray, target_width: int) -> np.ndarray:
     if frames <= target_width:
         return matrix
     edges = np.linspace(0, frames, target_width + 1).astype(int)
-    return np.stack(
-        [matrix[:, edges[i] : max(edges[i] + 1, edges[i + 1])].max(axis=1) for i in range(target_width)],
-        axis=1,
-    )
+    indices = edges[:-1]
+
+    if len(np.unique(indices)) != len(indices):
+        return np.stack(
+            [matrix[:, edges[i] : max(edges[i] + 1, edges[i + 1])].max(axis=1) for i in range(target_width)],
+            axis=1,
+        )
+
+    return np.maximum.reduceat(matrix, indices, axis=1)
 
 
 def _pool_freq(matrix: np.ndarray, target_height: int) -> np.ndarray:
@@ -233,10 +238,14 @@ def _pool_freq(matrix: np.ndarray, target_height: int) -> np.ndarray:
     if bins <= target_height:
         return matrix
     edges = np.linspace(0, bins, target_height + 1).astype(int)
-    return np.stack(
-        [matrix[edges[i] : max(edges[i] + 1, edges[i + 1]), :].max(axis=0) for i in range(target_height)],
-        axis=0,
-    )
+
+    pooled = np.empty((target_height, matrix.shape[1]), dtype=matrix.dtype)
+    for i in range(target_height):
+        start = edges[i]
+        end = max(start + 1, edges[i + 1])
+        pooled[i] = matrix[start:end].max(axis=0)
+
+    return pooled
 
 
 def spectrogram_payload(path: str, max_seconds: Optional[float] = None) -> dict:
