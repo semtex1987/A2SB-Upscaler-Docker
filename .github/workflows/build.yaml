@@ -35,7 +35,14 @@ jobs:
             python-multipart==0.0.20 \
             httpx==0.28.1 \
             pydub==0.25.1 \
-            tensorboard==2.20.0
+            tensorboard==2.20.0 \
+            tqdm==4.70.1 \
+            pytorch-lightning==2.6.6 \
+            einops==0.8.2 \
+            jsonargparse==4.53.0 \
+            matplotlib==3.10.9 \
+            torchaudio==2.11.1 \
+            rotary-embedding-torch==0.9.1
       - name: Pytest
         run: python -m pytest tests/ -q --tb=short
       - name: Set up Node
