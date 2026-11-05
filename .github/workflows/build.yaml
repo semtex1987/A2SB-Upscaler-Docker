@@ -40,7 +40,7 @@ jobs:
             pytorch-lightning==2.6.6 \
             einops==0.8.2 \
             jsonargparse==4.53.0 \
-            matplotlib==3.11.2 \
+            matplotlib==3.10.9 \
             torchaudio==2.11.1 \
             rotary-embedding-torch==0.9.1
       - name: Pytest
