@@ -364,7 +364,7 @@ export function TrainView({ config, jobs, logs, onHydrateLog }: TrainViewProps) 
                     : "From the most recent run in each split."
                 }
                 actions={
-                  <Button variant="ghost" onClick={() => void loadMetrics()} title="Refresh">
+                  <Button variant="ghost" size="icon" aria-label="Refresh" onClick={() => void loadMetrics()} title="Refresh">
                     <RefreshCw className="size-4" aria-hidden />
                   </Button>
                 }
@@ -665,7 +665,7 @@ export function TrainView({ config, jobs, logs, onHydrateLog }: TrainViewProps) 
               title="Checkpoints"
               description="Activate fine-tuned weights without restarting the container."
               actions={
-                <Button variant="ghost" onClick={() => void loadCheckpoints()} title="Refresh">
+                <Button variant="ghost" size="icon" aria-label="Refresh" onClick={() => void loadCheckpoints()} title="Refresh">
                   <RefreshCw className="size-4" aria-hidden />
                 </Button>
               }
