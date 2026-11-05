@@ -6,7 +6,7 @@
 ## 2026-07-26 - Contextual Instruction Pattern
 **Learning:** Users tend to ignore "walls of text" at the top of Gradio applications. Moving global instructions into localized component `info` properties places guidance exactly where users make decisions, significantly improving task completion and reducing confusion.
 **Action:** Always distribute global instructions into local component `info` properties rather than piling them in a single block at the top of the interface.
-## $(date +%Y-%m-%d) - Added aria-labels and size="icon" to refresh buttons
+## 2026-11-05 - Added aria-labels and size="icon" to refresh buttons
 
 **Learning:** The TrainView component uses shadcn-like `Button` components for refresh icons (`RefreshCw`), but previously omitted `aria-label` attributes and the `size="icon"` property. This made the buttons inaccessible to screen readers and visually improperly proportioned.
 
