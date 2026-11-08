@@ -222,10 +222,15 @@ def _pool_time(matrix: np.ndarray, target_width: int) -> np.ndarray:
     if frames <= target_width:
         return matrix
     edges = np.linspace(0, frames, target_width + 1).astype(int)
-    return np.stack(
-        [matrix[:, edges[i] : max(edges[i] + 1, edges[i + 1])].max(axis=1) for i in range(target_width)],
-        axis=1,
-    )
+    indices = edges[:-1]
+    # C-level vectorization for contiguous axis=1 is much faster
+    if len(np.unique(indices)) == target_width:
+        return np.maximum.reduceat(matrix, indices, axis=1)
+
+    out = np.empty((matrix.shape[0], target_width), dtype=matrix.dtype)
+    for i in range(target_width):
+        out[:, i] = matrix[:, edges[i] : max(edges[i] + 1, edges[i + 1])].max(axis=1)
+    return out
 
 
 def _pool_freq(matrix: np.ndarray, target_height: int) -> np.ndarray:
@@ -233,10 +238,10 @@ def _pool_freq(matrix: np.ndarray, target_height: int) -> np.ndarray:
     if bins <= target_height:
         return matrix
     edges = np.linspace(0, bins, target_height + 1).astype(int)
-    return np.stack(
-        [matrix[edges[i] : max(edges[i] + 1, edges[i + 1]), :].max(axis=0) for i in range(target_height)],
-        axis=0,
-    )
+    out = np.empty((target_height, matrix.shape[1]), dtype=matrix.dtype)
+    for i in range(target_height):
+        out[i] = matrix[edges[i] : max(edges[i] + 1, edges[i + 1]), :].max(axis=0)
+    return out
 
 
 def spectrogram_payload(path: str, max_seconds: Optional[float] = None) -> dict:
@@ -294,10 +299,18 @@ def peak_envelope(path: str, buckets: int = 1600) -> dict:
 
     buckets = max(1, min(buckets, y.size))
     edges = np.linspace(0, y.size, buckets + 1).astype(int)
-    peaks: list[float] = []
-    for i in range(buckets):
-        window = y[edges[i] : max(edges[i] + 1, edges[i + 1])]
-        peaks.append(round(float(np.max(np.abs(window))), 4))
+    indices = edges[:-1]
+
+    if len(np.unique(indices)) == buckets:
+        # Fast path: compute absolute array once, then C-level reduceat
+        abs_y = np.abs(y)
+        peaks_arr = np.maximum.reduceat(abs_y, indices).astype(np.float64)
+        peaks = [round(p, 4) for p in peaks_arr.tolist()]
+    else:
+        peaks: list[float] = []
+        for i in range(buckets):
+            window = y[edges[i] : max(edges[i] + 1, edges[i + 1])]
+            peaks.append(round(float(np.max(np.abs(window))), 4))
 
     ceiling = max(peaks) or 1.0
     return {
