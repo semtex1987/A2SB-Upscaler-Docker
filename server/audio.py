@@ -14,9 +14,9 @@ from server.config import ANALYSIS_MAX_SECONDS, MODEL_SAMPLE_RATE
 
 
 @functools.lru_cache(maxsize=128)
-def _get_butter_sos(order: int, normal_cutoff: float):
+def _get_butter_sos(order: int, normal_cutoff: float, btype: str = "low"):
     """`butter` is slow and the cutoff/rate pair is usually static across a batch."""
-    return butter(order, normal_cutoff, btype="low", analog=False, output="sos")
+    return butter(order, normal_cutoff, btype=btype, analog=False, output="sos")
 
 
 def butter_lowpass_filter(data, cutoff: float, fs: int, order: int = 10):
@@ -124,7 +124,7 @@ def high_band_rms_db(path: str, cutoff_hz: float) -> float:
     nyq = 0.5 * float(sr)
     if cutoff_hz >= nyq:
         return -200.0
-    sos = butter(8, max(cutoff_hz / nyq, 1e-6), btype="highpass", analog=False, output="sos")
+    sos = _get_butter_sos(8, max(cutoff_hz / nyq, 1e-6), btype="highpass")
     filtered = sosfiltfilt(sos, y, axis=-1)
     channel_powers = np.mean(np.square(filtered), axis=-1)
     mean_power = float(np.mean(channel_powers))
