@@ -20,3 +20,7 @@
 ## 2026-06-13 - Optimize librosa spectral feature extraction
 **Learning:** `librosa.feature.spectral_flatness` and `librosa.feature.spectral_rolloff` default to `hop_length=n_fft//4` (512 when `n_fft=2048`), producing 75% STFT frame overlap. For coarse heuristic checks that aggregate over time (mean, percentile), this overlap computes far more frames than needed.
 **Action:** Set `hop_length=n_fft` (e.g., `hop_length=2048`) to eliminate the overlap when using these features for macroscopic heuristic checks. Keep `n_fft` at its default 2048 — only `hop_length` needs to change. This yields ~4× fewer STFT frames and proportionally less compute, with no meaningful accuracy loss for mean/percentile aggregations.
+
+## 2024-05-15 - _pool_freq bottleneck (Manual looping vs np.maximum.reduceat)
+**Learning:** `np.maximum.reduceat` is significantly slower for non-contiguous reductions (e.g. over axis=0). Manual loop with `np.empty` is actually faster. `np.maximum.reduceat` is only faster over contiguous dimensions (e.g. axis=1). Also `peak_envelope` list comprehension bottleneck can be rewritten using `np.maximum.reduceat` over absolute values, saving computation time.
+**Action:** Use `reduceat` only on contiguous axis (e.g., `axis=1`), or fallback to `np.empty` + loop for non-contiguous dimensions.
